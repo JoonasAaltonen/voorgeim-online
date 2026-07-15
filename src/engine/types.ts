@@ -1,0 +1,35 @@
+// Core battle model types (pure). Kept intentionally small for Phase 0; the
+// combat loop, deployment, and dice resolution land in Phase 1.
+
+import type { UnitType } from './units';
+
+export type Player = 'p1' | 'p2';
+
+export const otherPlayer = (p: Player): Player => (p === 'p1' ? 'p2' : 'p1');
+
+/** Board side each player deploys on. p1 = bottom, p2 = top (matches the art). */
+export const PLAYER_SIDE = { p1: 'bottom', p2: 'top' } as const;
+
+export type UnitStatus = 'reserve' | 'deployed' | 'dead' | 'withdrawn';
+
+export interface BattleUnit {
+  id: string;
+  type: UnitType;
+  owner: Player;
+  /** Remaining hitpoints. */
+  hp: number;
+  /** Infantry-only: reached 0 HP once, now fights at −1 until finished off. */
+  wounded?: boolean;
+  /** Cell id it currently occupies while deployed. */
+  cellId?: string;
+  status: UnitStatus;
+}
+
+/** True for the off-grid indirect-fire support artillery. */
+export const isSupportUnit = (u: BattleUnit): boolean => u.id.endsWith('-support');
+
+/** Coin image url for a unit, using the synced asset naming convention. */
+export function coinAsset(type: UnitType | 'unknown' | 'wounded', owner: Player): string {
+  const n = owner === 'p1' ? 1 : 2;
+  return `/assets/coin-${type}-p${n}.png`;
+}

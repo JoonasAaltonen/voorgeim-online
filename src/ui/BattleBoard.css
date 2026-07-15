@@ -1,0 +1,59 @@
+.battle-board {
+  position: relative;
+  width: 100%;
+  max-width: 503px;
+  aspect-ratio: 503 / 558;
+  margin: 0 auto;
+  user-select: none;
+}
+
+.battle-board__bg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Each cell is a transparent circular hit-area centered on its coordinate. */
+.bcell {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  cursor: default;
+  display: grid;
+  place-items: center;
+}
+
+.bcell__coin {
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Legal-action highlights */
+.bcell--deploy {
+  cursor: pointer;
+  background: rgba(120, 200, 120, 0.28);
+  box-shadow: 0 0 0 2px rgba(120, 220, 120, 0.7) inset;
+}
+.bcell--move {
+  cursor: pointer;
+  background: rgba(120, 170, 255, 0.28);
+  box-shadow: 0 0 0 2px rgba(120, 170, 255, 0.8) inset;
+}
+.bcell--attack {
+  cursor: pointer;
+  box-shadow: 0 0 0 3px rgba(255, 90, 90, 0.9) inset;
+}
+.bcell--selected {
+  border-color: #ffd54a;
+  box-shadow: 0 0 10px 2px rgba(255, 213, 74, 0.7);
+}
+
+/* Own units on your turn are clickable to select. */
+.bcell:has(.bcell__coin) {
+  cursor: pointer;
+}
