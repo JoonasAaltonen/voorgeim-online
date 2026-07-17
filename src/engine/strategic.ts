@@ -12,7 +12,7 @@
 // unrepresentable rather than merely a bug we promise not to write.
 
 import type { Player, StateTransition } from './types';
-import { otherPlayer, playerLabel } from './types';
+import { PLAYERS, otherPlayer, playerLabel } from './types';
 import type { UnitType } from './units';
 import { STARTING_ARMY, isMapOnly } from './units';
 import type { NodeId, Side } from './map';
@@ -27,6 +27,7 @@ import {
   isStaging,
   slotsFor,
 } from './map';
+import { defaultRng, rollUntilDifferent, type Rng } from './dice';
 
 /** Strategic actions a player takes per turn, sequentially (VOORGEIM.md). */
 export const ACTIONS_PER_TURN = 2;
@@ -87,9 +88,45 @@ export interface MapUnit {
    * there it decides how many slots you get.
    */
   side?: Side;
+  /**
+   * Infantry only: hit 0 HP in a battle and survived. Fights at −1 and dies to
+   * the next hit. This is the one thing a battle leaves on a unit — everything
+   * else heals, because "any units that took damage but were not destroyed or
+   * wounded […] are considered reinforced automatically".
+   *
+   * Cleared only by reorganizing in the staging area.
+   */
+  wounded?: boolean;
+  /**
+   * The enemy has seen what this is — by fighting it, or (Phase 6) by reconning
+   * it. Cleared by reorganizing in a controlled node, which is the manual's only
+   * way back into the fog. Nothing filters on this yet; Phase 6 is what makes it
+   * bite, and until then it is honest bookkeeping the UI can already show.
+   */
+  revealed?: boolean;
 }
 
-export type StratLogKind = 'info' | 'move' | 'turn' | 'org';
+/**
+ * A battle has been lost and the loser owes the board a destination. Play stops
+ * until they name one: this is the only time the acting seat is not `turn`,
+ * because the battle happened on the winner's turn but the falling back is the
+ * loser's decision to make.
+ *
+ * Raised only when the choice is real. One legal node resolves itself, and none
+ * at all is encirclement — the units are destroyed on the spot rather than
+ * parked in a prompt with no answer.
+ */
+export interface PendingRetreat {
+  player: Player;
+  from: NodeId;
+  /** Adjacent nodes free of the winner: "a friendly or neutral adjacent node". */
+  options: NodeId[];
+}
+
+/** Nodes to hold, and turns to hold them, to win. */
+export const HOLD_TO_WIN = 2;
+
+export type StratLogKind = 'info' | 'move' | 'turn' | 'org' | 'battle';
 
 export interface StratLogEntry {
   id: number;
@@ -101,10 +138,36 @@ export interface StrategicState {
   turn: Player;
   /** Strategic actions the current player has left this turn. */
   actionsLeft: number;
-  /** Increments each time play returns to p1. */
+  /** Increments when both players have taken their turn. */
   round: number;
+  /**
+   * Who won this round's initiative and therefore moved first. Turn order is not
+   * a strict alternation — each round re-rolls — so "have both players gone yet?"
+   * cannot be answered by looking at `turn` alone.
+   */
+  firstPlayer: Player;
   units: Record<string, MapUnit>;
   armies: Record<string, Army>;
+  /**
+   * Fortifications waiting for a battle, keyed by `fortKey`. They belong to a
+   * node *and* a player, never to an army: "they cannot be moved along the armies
+   * and they will be removed from the location if all armies are moved away".
+   */
+  forts: Record<string, number>;
+  /**
+   * Nodes where a player has just won a battle and may re-sort the survivors into
+   * armies once, for free and without the usual control requirement — because on
+   * the physical board the winner has to move chips between two boards and cannot
+   * be expected to remember which army each was in. Keyed node → the winner, who
+   * spends it on their own turn (so a defender's win waits for their next turn
+   * rather than interrupting the attacker's).
+   */
+  freeReorgs: Record<string, Player>;
+  /** Consecutive own-turns each player has held the enemy's doorstep. */
+  hold: Record<Player, number>;
+  winner: Player | null;
+  /** Set only between a lost battle and the loser naming a destination. */
+  pendingRetreat: PendingRetreat | null;
   log: StratLogEntry[];
   seq: number;
   /** Supplies army ids and `Army.movedAt` stamps. */
@@ -119,10 +182,24 @@ function log(s: StrategicState, kind: StratLogKind, text: string): void {
   s.log.push({ id: s.seq++, kind, text });
 }
 
+/**
+ * "Each turn starts with a dice roll for initiative to decide which player starts
+ * the sequence. Roll until one player has a greater value."
+ *
+ * Consequence worth stating out loud, because it looks like a bug the first time
+ * you meet it: turn order is *not* an alternation. Lose initiative one round and
+ * win it the next and you move twice in a row — which is a real weapon, and the
+ * reason the roll exists.
+ */
+function rollInitiative(rng: Rng): Player {
+  const { a, b } = rollUntilDifferent(rng);
+  return a > b ? 'p1' : 'p2';
+}
+
 /** Every player starts with their full roster loose in their staging area. */
-export function createStrategic(): StrategicState {
+export function createStrategic(rng: Rng = defaultRng): StrategicState {
   const units: Record<string, MapUnit> = {};
-  for (const owner of ['p1', 'p2'] as Player[]) {
+  for (const owner of PLAYERS) {
     for (const [type, count] of Object.entries(STARTING_ARMY) as [UnitType, number][]) {
       for (let i = 1; i <= count; i++) {
         const id = `${owner}-${type}-${i}`;
@@ -130,18 +207,25 @@ export function createStrategic(): StrategicState {
       }
     }
   }
+  const first = rollInitiative(rng);
   const s: StrategicState = {
-    turn: 'p1',
+    turn: first,
     actionsLeft: ACTIONS_PER_TURN,
     round: 1,
+    firstPlayer: first,
     units,
     armies: {},
+    forts: {},
+    freeReorgs: {},
+    hold: { p1: 0, p2: 0 },
+    winner: null,
+    pendingRetreat: null,
     log: [],
     seq: 0,
     tick: 0,
   };
   log(s, 'info', 'Both sides muster in their staging areas — every unit starts disorganized.');
-  log(s, 'turn', `Round 1 — ${playerLabel('p1')} has ${ACTIONS_PER_TURN} actions.`);
+  log(s, 'turn', `Round 1 — ${playerLabel(first)} wins initiative and has ${ACTIONS_PER_TURN} actions.`);
   return s;
 }
 
@@ -297,6 +381,46 @@ export function canReorganize(s: StrategicState, nodeId: NodeId, player: Player)
   return !isSea(nodeId) && controlFor(s, nodeId, player) === 'controlled';
 }
 
+// ------------------------------------------------------------ fortifications
+
+/** A fortification belongs to a node and a player — one store, two owners. */
+export const fortKey = (nodeId: NodeId, player: Player): string => `${nodeId}:${player}`;
+
+/** Fortifications a player has waiting in a node for the next battle there. */
+export function fortsAt(s: StrategicState, nodeId: NodeId, player: Player): number {
+  return s.forts[fortKey(nodeId, player)] ?? 0;
+}
+
+/**
+ * You can only fortify ground you hold an army on. Staging is excluded: you
+ * cannot be attacked there, so a fort would never be deployed.
+ */
+export function canFortify(s: StrategicState, nodeId: NodeId, player: Player): boolean {
+  return !isStaging(nodeId) && armiesAt(s, nodeId, player).length > 0;
+}
+
+/**
+ * Drop a fort's claim on a node once its owner has no army left there:
+ * "removed from the location if all armies are moved away". Called after any move
+ * that could empty a node.
+ */
+function pruneForts(s: StrategicState, nodeId: NodeId): void {
+  for (const player of PLAYERS) {
+    if (armiesAt(s, nodeId, player).length === 0) delete s.forts[fortKey(nodeId, player)];
+  }
+}
+
+/**
+ * Why an action cannot be taken at all, regardless of what it is: the game is
+ * decided, or the board is waiting on a loser to retreat. Both freeze play for
+ * everyone, so every action asks this first.
+ */
+function frozen(s: StrategicState): string | null {
+  if (s.winner) return 'The game is over.';
+  if (s.pendingRetreat) return `${playerLabel(s.pendingRetreat.player)} must retreat first.`;
+  return null;
+}
+
 // ---------------------------------------------------------------- movement
 
 /** Nodes an army may move to now: path-adjacent, on its owner's turn, with an action in hand. */
@@ -342,7 +466,14 @@ function overrun(s: StrategicState, nodeId: NodeId, by: Player): void {
   log(s, 'org', `${playerLabel(victim)} loses ${caught.length} overrun at ${nodeId} (${what}).`);
 }
 
-export function moveArmy(state: StrategicState, armyId: string, nodeId: NodeId): Transition {
+export function moveArmy(
+  state: StrategicState,
+  armyId: string,
+  nodeId: NodeId,
+  rng: Rng = defaultRng,
+): Transition {
+  const stop = frozen(state);
+  if (stop) return { state, error: stop };
   const a = state.armies[armyId];
   if (!a) return { state, error: 'Unknown army.' };
   if (!NODE_BY_ID[nodeId]) return { state, error: 'Unknown location.' };
@@ -366,12 +497,27 @@ export function moveArmy(state: StrategicState, armyId: string, nodeId: NodeId):
   s.actionsLeft--;
   log(s, 'move', `${playerLabel(a.owner)} army of ${moved.length} moves ${from} → ${nodeId}.`);
   overrun(s, nodeId, a.owner);
-  if (s.actionsLeft === 0) passTurn(s);
+  // Forts stay behind, so a node the army just vacated may have lost its last
+  // defender and with it the right to keep them.
+  pruneForts(s, from);
+  // A free post-battle reshuffle needs two armies to be worth anything; once the
+  // player has taken one away, drop the offer.
+  if (s.freeReorgs[from] === a.owner && armiesAt(s, from, a.owner).length < 2) {
+    delete s.freeReorgs[from];
+  }
+  if (s.actionsLeft === 0) passTurn(s, rng);
   return { state: s };
 }
 
 /** Move one loose unit, or two from the same node, for a single action. */
-export function moveLoose(state: StrategicState, unitIds: string[], nodeId: NodeId): Transition {
+export function moveLoose(
+  state: StrategicState,
+  unitIds: string[],
+  nodeId: NodeId,
+  rng: Rng = defaultRng,
+): Transition {
+  const stop = frozen(state);
+  if (stop) return { state, error: stop };
   const ids = [...new Set(unitIds)];
   if (ids.length === 0) return { state, error: 'No units chosen.' };
   if (ids.length > MAX_LOOSE_MOVE) {
@@ -409,7 +555,7 @@ export function moveLoose(state: StrategicState, unitIds: string[], nodeId: Node
   s.actionsLeft--;
   const what = ids.length === 1 ? us[0].type : `${ids.length} disorganized units`;
   log(s, 'move', `${playerLabel(us[0].owner)} ${what} moves ${from} → ${nodeId}.`);
-  if (s.actionsLeft === 0) passTurn(s);
+  if (s.actionsLeft === 0) passTurn(s, rng);
   return { state: s };
 }
 
@@ -423,7 +569,13 @@ export function moveLoose(state: StrategicState, unitIds: string[], nodeId: Node
  * defender who crosses early makes the attacker enter opposite them, which is not
  * where either side's colour is painted.
  */
-export function swapSide(state: StrategicState, nodeId: NodeId): Transition {
+export function swapSide(
+  state: StrategicState,
+  nodeId: NodeId,
+  rng: Rng = defaultRng,
+): Transition {
+  const stop = frozen(state);
+  if (stop) return { state, error: stop };
   const player = state.turn;
   if (!NODE_BY_ID[nodeId]) return { state, error: 'Unknown location.' };
   if (!isAsymmetric(nodeId)) {
@@ -445,7 +597,38 @@ export function swapSide(state: StrategicState, nodeId: NodeId): Transition {
   }
   s.actionsLeft--;
   log(s, 'move', `${playerLabel(player)} crosses to the other side of ${nodeId}.`);
-  if (s.actionsLeft === 0) passTurn(s);
+  if (s.actionsLeft === 0) passTurn(s, rng);
+  return { state: s };
+}
+
+/**
+ * Build a defensive fortification, for one action. "Players can spend their
+ * strategic actions to construct defensive fortifications in locations they hold
+ * armies in." One per action; it waits in the node until a battle deploys it.
+ */
+export function buildFort(
+  state: StrategicState,
+  nodeId: NodeId,
+  rng: Rng = defaultRng,
+): Transition {
+  const stop = frozen(state);
+  if (stop) return { state, error: stop };
+  const player = state.turn;
+  if (!NODE_BY_ID[nodeId]) return { state, error: 'Unknown location.' };
+  if (state.actionsLeft <= 0) return { state, error: 'No actions left this turn.' };
+  if (!canFortify(state, nodeId, player)) {
+    return { state, error: 'You can only fortify a location you hold an army in.' };
+  }
+
+  const s = clone(state);
+  s.forts[fortKey(nodeId, player)] = fortsAt(s, nodeId, player) + 1;
+  s.actionsLeft--;
+  log(
+    s,
+    'org',
+    `${playerLabel(player)} fortifies ${nodeId} (${s.forts[fortKey(nodeId, player)]} ready).`,
+  );
+  if (s.actionsLeft === 0) passTurn(s, rng);
   return { state: s };
 }
 
@@ -481,7 +664,14 @@ export type Reassignment = Record<string, string | null>;
  * is done will be hidden […] regardless of whether they actually move between
  * armies", which is why a no-op reassignment is legal and still costs an action.
  */
-export function reorganize(state: StrategicState, nodeId: NodeId, assign: Reassignment): Transition {
+export function reorganize(
+  state: StrategicState,
+  nodeId: NodeId,
+  assign: Reassignment,
+  rng: Rng = defaultRng,
+): Transition {
+  const stop = frozen(state);
+  if (stop) return { state, error: stop };
   const player = state.turn;
   if (!NODE_BY_ID[nodeId]) return { state, error: 'Unknown location.' };
   if (state.actionsLeft <= 0) return { state, error: 'No actions left this turn.' };
@@ -532,6 +722,7 @@ export function reorganize(state: StrategicState, nodeId: NodeId, assign: Reassi
     else s.units[id].armyId = target === NEW_ARMY ? created! : target;
   }
   dissolveEmpty(s);
+  settleReorg(s, nodeId, player, true);
 
   s.actionsLeft--;
   const n = armiesAt(s, nodeId, player).length;
@@ -540,7 +731,111 @@ export function reorganize(state: StrategicState, nodeId: NodeId, assign: Reassi
     'org',
     `${playerLabel(player)} reorganizes at ${nodeId} — ${n} arm${n === 1 ? 'y' : 'ies'} here now.`,
   );
-  if (s.actionsLeft === 0) passTurn(s);
+  if (s.actionsLeft === 0) passTurn(s, rng);
+  return { state: s };
+}
+
+/**
+ * The bookkeeping every reorganization ends with: heal the wounded that made it
+ * home to staging, and settle who is face-up.
+ *
+ * "All units in the node … will be hidden … regardless of whether they actually
+ * move between armies" — re-hiding is the whole point of a no-op reorganize, and
+ * (with Phase 6) the only way back into the fog. But a reorganization only hides
+ * when the location earns it: a free post-battle reshuffle in a still-contested
+ * node leaves everyone revealed, which is why `hide` is passed rather than
+ * assumed. A wounded unit stays face-up anywhere but staging, where it heals.
+ */
+function settleReorg(s: StrategicState, nodeId: NodeId, player: Player, hide: boolean): void {
+  const inStaging = isStaging(nodeId);
+  for (const u of unitsAtFor(s, nodeId, player)) {
+    if (isRecon(u)) continue;
+    if (u.wounded && inStaging) {
+      delete u.wounded;
+      delete u.revealed;
+      log(s, 'org', `${playerLabel(player)} ${u.type} is reinforced to full strength.`);
+    } else if (u.wounded) {
+      u.revealed = true; // stays face-up outside staging
+    } else if (hide) {
+      delete u.revealed;
+    }
+  }
+}
+
+/** May `player` re-sort survivors at this node for free (they just won here)? */
+export function canFreeReorg(s: StrategicState, nodeId: NodeId, player: Player): boolean {
+  return s.freeReorgs[nodeId] === player;
+}
+
+/**
+ * The winner's free post-battle reshuffle. Like `reorganize`, but it costs no
+ * action, needs no control, and touches only units still in an army — the
+ * withdrawn are disorganized and stay that way until a paid reorganization in a
+ * controlled node. It re-hides only if the node happens to be controlled;
+ * otherwise the survivors stay revealed, exactly as the manual says.
+ */
+export function freeReorganize(
+  state: StrategicState,
+  nodeId: NodeId,
+  assign: Reassignment,
+): Transition {
+  const stop = frozen(state);
+  if (stop) return { state, error: stop };
+  const player = state.turn;
+  if (!NODE_BY_ID[nodeId]) return { state, error: 'Unknown location.' };
+  if (!canFreeReorg(state, nodeId, player)) {
+    return { state, error: 'No free reorganization is owed here.' };
+  }
+
+  const ids = Object.keys(assign);
+  for (const id of ids) {
+    const u = state.units[id];
+    if (!u) return { state, error: 'Unknown unit.' };
+    if (u.owner !== player) return { state, error: 'Those are not your units.' };
+    if (u.nodeId !== nodeId) return { state, error: 'Those units are not in this location.' };
+    if (isRecon(u)) return { state, error: 'Recon units are never part of an army.' };
+    // The free reshuffle is only over units that came back organized. A withdrawn
+    // unit is disorganized now and needs a full reorganization to re-form.
+    if (!u.armyId) {
+      return { state, error: 'Withdrawn units need a full reorganization to re-form.' };
+    }
+  }
+
+  const here = new Set(armiesAt(state, nodeId, player).map((a) => a.id));
+  for (const target of Object.values(assign)) {
+    if (target === null || target === NEW_ARMY) continue;
+    if (!here.has(target)) return { state, error: 'That army is not in this location.' };
+  }
+  const forming = ids.filter((id) => assign[id] === NEW_ARMY);
+  if (forming.length > 0 && armyCount(state, player) >= MAX_ARMIES) {
+    return { state, error: `You already field ${MAX_ARMIES} armies.` };
+  }
+
+  const s = clone(state);
+  let created: string | null = null;
+  if (forming.length > 0) {
+    created = `army-${player}-${++s.tick}`;
+    s.armies[created] = { id: created, owner: player, movedAt: s.tick };
+  }
+  for (const id of ids) {
+    const target = assign[id];
+    if (target === null) delete s.units[id].armyId;
+    else s.units[id].armyId = target === NEW_ARMY ? created! : target;
+  }
+  dissolveEmpty(s);
+  settleReorg(s, nodeId, player, isStaging(nodeId) || controlFor(s, nodeId, player) === 'controlled');
+  delete s.freeReorgs[nodeId];
+  log(s, 'org', `${playerLabel(player)} re-sorts the victors at ${nodeId} — free after the battle.`);
+  return { state: s };
+}
+
+/** Decline the free reshuffle, leaving the survivors in the armies they held. */
+export function dismissFreeReorg(state: StrategicState, nodeId: NodeId): Transition {
+  if (!canFreeReorg(state, nodeId, state.turn)) {
+    return { state, error: 'No free reorganization is owed here.' };
+  }
+  const s = clone(state);
+  delete s.freeReorgs[nodeId];
   return { state: s };
 }
 
@@ -586,17 +881,75 @@ function enforceSupply(s: StrategicState, player: Player): void {
   }
 }
 
-function passTurn(s: StrategicState): void {
+/**
+ * Nodes adjacent to a player's staging area — the ground their opponent must
+ * hold to win. Staging areas connect only to the real map through these, so
+ * "occupies all locations adjacent to the enemy staging area" is exactly this
+ * set.
+ */
+export function doorstep(player: Player): NodeId[] {
+  return NODE_BY_ID[STAGING_NODE[player]]?.adjacency ?? [];
+}
+
+/**
+ * The victory check, run at the end of each player's own turn. "Occupies all
+ * locations adjacent to the enemy staging area for 2 turns. If any of the
+ * locations are relieved by the opponent, the counter is reset."
+ *
+ * Measured only for the player who just moved, and only on their own turns: the
+ * count is consecutive *own* turns, so it advances once per round for whoever is
+ * besieging, and snaps back to zero the instant they no longer hold the whole
+ * ring.
+ */
+function checkVictory(s: StrategicState, player: Player): void {
+  const ring = doorstep(otherPlayer(player));
+  const holdsAll = ring.length > 0 && ring.every((n) => occupies(s, n, player));
+  if (!holdsAll) {
+    if (s.hold[player] > 0) {
+      log(s, 'turn', `${playerLabel(player)} no longer holds the enemy doorstep — the count resets.`);
+    }
+    s.hold[player] = 0;
+    return;
+  }
+  s.hold[player] += 1;
+  if (s.hold[player] >= HOLD_TO_WIN) {
+    s.winner = player;
+    log(s, 'turn', `${playerLabel(player)} has held the enemy doorstep — victory.`);
+    return;
+  }
+  log(
+    s,
+    'turn',
+    `${playerLabel(player)} holds the enemy doorstep (${s.hold[player]}/${HOLD_TO_WIN}).`,
+  );
+}
+
+function passTurn(s: StrategicState, rng: Rng): void {
   enforceSupply(s, s.turn);
-  s.turn = otherPlayer(s.turn);
+  checkVictory(s, s.turn);
+  if (s.winner) return;
+  // A round is over once the player who moved second is done — i.e. when the one
+  // just finishing is not the round's first mover. Then initiative is re-rolled.
+  if (s.turn === s.firstPlayer) {
+    // First mover done; hand off to the other for the back half of the round.
+    s.turn = otherPlayer(s.turn);
+  } else {
+    s.round++;
+    s.firstPlayer = rollInitiative(rng);
+    s.turn = s.firstPlayer;
+  }
   s.actionsLeft = ACTIONS_PER_TURN;
-  if (s.turn === 'p1') s.round++;
-  log(s, 'turn', `Round ${s.round} — ${playerLabel(s.turn)} has ${s.actionsLeft} actions.`);
+  const how = s.turn === s.firstPlayer && s.actionsLeft === ACTIONS_PER_TURN && s.round > 1
+    ? 'wins initiative and '
+    : '';
+  log(s, 'turn', `Round ${s.round} — ${playerLabel(s.turn)} ${how}has ${s.actionsLeft} actions.`);
 }
 
 /** End the current player's turn without spending the remaining actions. */
-export function endTurn(state: StrategicState): Transition {
+export function endTurn(state: StrategicState, rng: Rng = defaultRng): Transition {
+  if (state.winner) return { state, error: 'The game is over.' };
+  if (state.pendingRetreat) return { state, error: 'A retreat is pending.' };
   const s = clone(state);
-  passTurn(s);
+  passTurn(s, rng);
   return { state: s };
 }

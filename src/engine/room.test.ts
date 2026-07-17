@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   applyIntent,
   battleMover,
@@ -12,6 +12,18 @@ import { unitsAt } from './strategic';
 import { otherPlayer, playerLabel, type Player } from './types';
 
 const room = () => createRoom('TEST42');
+
+// Initiative is a dice roll, so pin it: p1 always opens, and the seat-authority
+// tests below can say "p1's turn" and mean it. The dice test injects its own rng
+// and is unaffected.
+beforeEach(() => {
+  let high = false;
+  vi.spyOn(Math, 'random').mockImplementation(() => {
+    high = !high;
+    return high ? 0.99 : 0;
+  });
+});
+afterEach(() => vi.restoreAllMocks());
 
 /** Front-row cell on a player's own side. p1 = bottom, p2 = top. */
 const frontCell = (p: Player) => `${p === 'p1' ? 'bottom' : 'top'}-r0-c0`;
@@ -216,5 +228,113 @@ describe('viewFor', () => {
   it('is the whole room until fog lands in Phase 6', () => {
     const r = room();
     expect(viewFor('p1', r)).toEqual(viewFor('p2', r));
+  });
+});
+
+describe('map battles (Phase 7)', () => {
+  // Put `n` of a player's staging units of a type into a fresh army on `node`.
+  function garrison(r: RoomState, owner: Player, node: string, type: string, n: number): string {
+    const s = r.strategic;
+    const id = `army-${owner}-${++s.tick}`;
+    s.armies[id] = { id, owner, movedAt: s.tick };
+    Object.values(s.units)
+      .filter((u) => u.owner === owner && !u.armyId && u.nodeId === STAGING_NODE[owner] && u.type === type)
+      .slice(0, n)
+      .forEach((u) => {
+        u.nodeId = node;
+        u.armyId = id;
+      });
+    return id;
+  }
+
+  // n09 holds both sides in contact for these.
+  function contested(): RoomState {
+    const r = room();
+    garrison(r, 'p1', 'n09', 'infantry', 2);
+    garrison(r, 'p2', 'n09', 'armor', 1);
+    return r;
+  }
+
+  it('opens a battle only for the seat whose turn it is, and moves both to the board', () => {
+    const r = contested();
+    expect(applyIntent(r, 'p2', { t: 'stratInitiateBattle', nodeId: 'n09' }).error).toMatch(
+      /P1 - Red's turn/,
+    );
+    const t = applyIntent(r, 'p1', { t: 'stratInitiateBattle', nodeId: 'n09' });
+    expect(t.error).toBeUndefined();
+    expect(t.state.battle?.node).toBe('n09');
+    expect(t.state.view).toBe('battle');
+  });
+
+  it('freezes strategic play until the battle is posted back', () => {
+    const r = applyIntent(contested(), 'p1', { t: 'stratInitiateBattle', nodeId: 'n09' }).state;
+    const move = applyIntent(r, 'p1', { t: 'stratEndTurn' });
+    expect(move.error).toMatch(/finish the battle/i);
+  });
+
+  it('will not resolve a battle that is still being fought', () => {
+    const r = applyIntent(contested(), 'p1', { t: 'stratInitiateBattle', nodeId: 'n09' }).state;
+    expect(applyIntent(r, 'p1', { t: 'resolveBattle' }).error).toMatch(/not finished/i);
+  });
+
+  it('posts a finished battle back, clears the board, and returns to the map', () => {
+    const r = applyIntent(contested(), 'p1', { t: 'stratInitiateBattle', nodeId: 'n09' }).state;
+    // Force the board to a decided state, as the battle engine would.
+    r.battle!.phase = 'over';
+    r.battle!.winner = 'p1';
+    for (const u of Object.values(r.battle!.units)) {
+      u.status = u.owner === 'p2' ? 'dead' : 'deployed';
+    }
+    const t = applyIntent(r, 'p2', { t: 'resolveBattle' }); // either seat may
+    expect(t.error).toBeUndefined();
+    expect(t.state.battle).toBeNull();
+    expect(t.state.view).toBe('map');
+    // p2's armor was destroyed; p1 holds the node.
+    expect(unitsAt(t.state.strategic, 'n09').every((u) => u.owner === 'p1')).toBe(true);
+  });
+
+  it('builds a fortification on ground the moving seat holds', () => {
+    const r = room();
+    garrison(r, 'p1', 'n09', 'infantry', 2);
+    const t = applyIntent(r, 'p1', { t: 'stratBuildFort', nodeId: 'n09' });
+    expect(t.error).toBeUndefined();
+    expect(t.state.strategic.forts['n09:p1']).toBe(1);
+  });
+
+  it('lets the winning seat spend a free post-battle reshuffle, and decline it', () => {
+    const r = room();
+    const a = garrison(r, 'p1', 'n09', 'infantry', 2);
+    const b = garrison(r, 'p1', 'n09', 'infantry', 2);
+    r.strategic.freeReorgs['n09'] = 'p1';
+    const mover = Object.values(r.strategic.units).find((u) => u.armyId === a)!;
+
+    // The wrong seat cannot, since a free reshuffle is still the mover's own turn.
+    expect(
+      applyIntent(r, 'p2', { t: 'stratFreeReorganize', nodeId: 'n09', assign: { [mover.id]: b } })
+        .error,
+    ).toMatch(/P1 - Red's turn/);
+
+    const t = applyIntent(r, 'p1', {
+      t: 'stratFreeReorganize',
+      nodeId: 'n09',
+      assign: { [mover.id]: b },
+    });
+    expect(t.error).toBeUndefined();
+    expect(t.state.strategic.actionsLeft).toBe(2); // free
+    expect(t.state.strategic.freeReorgs['n09']).toBeUndefined();
+
+    // And declining simply clears the offer.
+    const d = applyIntent(r, 'p1', { t: 'stratDismissFreeReorg', nodeId: 'n09' });
+    expect(d.state.strategic.freeReorgs['n09']).toBeUndefined();
+  });
+
+  it('lets only the beaten seat resolve a pending retreat', () => {
+    const r = room();
+    garrison(r, 'p1', 'n09', 'armor', 1);
+    r.strategic.pendingRetreat = { player: 'p2', from: 'n09', options: ['n08', 'n10'] };
+    expect(applyIntent(r, 'p1', { t: 'stratRetreat', nodeId: 'n08' }).error).toMatch(/waiting/i);
+    const t = applyIntent(r, 'p2', { t: 'stratRetreat', nodeId: 'n08' });
+    expect(t.error).toBeUndefined();
+    expect(t.state.strategic.pendingRetreat).toBeNull();
   });
 });

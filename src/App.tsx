@@ -10,8 +10,8 @@ import type { View } from './engine/room';
 import './App.css';
 
 const VIEWS: { id: View; label: string; phase: string }[] = [
-  { id: 'battle', label: 'Battle scenario', phase: 'Phase 1–2 · scenario builder + combat loop' },
-  { id: 'map', label: 'Strategic map', phase: 'Phase 3 · node graph + movement' },
+  { id: 'battle', label: 'Battle scenario', phase: 'Phases 1–2 · scenario builder + combat loop' },
+  { id: 'map', label: 'Strategic map', phase: 'Phases 3–7 · armies, supply, battles, victory' },
 ];
 
 function App() {

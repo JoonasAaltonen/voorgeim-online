@@ -32,8 +32,11 @@ import {
 } from './battle';
 import type { StrategicState, Transition as StratTransition } from './strategic';
 import {
+  buildFort,
   createStrategic,
+  dismissFreeReorg,
   endTurn,
+  freeReorganize,
   moveArmy,
   moveLoose,
   reorganize,
@@ -41,6 +44,7 @@ import {
   swapSide,
   type Reassignment,
 } from './strategic';
+import { createBattleAt, resolveBattle, resolveRetreat } from './campaign';
 import type { NodeId } from './map';
 import { defaultRng, type Rng } from './dice';
 
@@ -72,7 +76,11 @@ type TableIntent =
   | { t: 'setScenario'; scenario: Scenario }
   | { t: 'startBattle' }
   | { t: 'newScenario' }
-  | { t: 'stratReset' };
+  | { t: 'stratReset' }
+  // Posting a finished map battle back onto the strategic board. Open to both
+  // seats: the result is fully determined by the battle, so either player may
+  // press "return to the map" once it is over.
+  | { t: 'resolveBattle' };
 
 /** Acting inside a battle — only the current mover may send these. */
 type BattleIntent =
@@ -91,9 +99,21 @@ type StratIntent =
   | { t: 'stratSplit'; unitIds: string[] }
   | { t: 'stratSwapSide'; nodeId: NodeId }
   | { t: 'stratReorganize'; nodeId: NodeId; assign: Reassignment }
+  | { t: 'stratFreeReorganize'; nodeId: NodeId; assign: Reassignment }
+  | { t: 'stratDismissFreeReorg'; nodeId: NodeId }
+  | { t: 'stratBuildFort'; nodeId: NodeId }
+  | { t: 'stratInitiateBattle'; nodeId: NodeId }
   | { t: 'stratEndTurn' };
 
-export type Intent = TableIntent | BattleIntent | StratIntent;
+/**
+ * The one intent that is *not* sent by the player whose turn it is: after a lost
+ * battle the beaten side chooses where to fall back, even though the winner's
+ * turn is still running. Kept out of `StratIntent` for exactly that reason — its
+ * authority answer is `pendingRetreat.player`, not `turn`.
+ */
+type RetreatIntent = { t: 'stratRetreat'; nodeId: NodeId };
+
+export type Intent = TableIntent | BattleIntent | StratIntent | RetreatIntent;
 
 // Runtime membership, not just types: intents arrive over a socket, so an
 // unrecognised one has to be rejected rather than fall off the end of a switch
@@ -104,6 +124,7 @@ const TABLE_INTENTS: ReadonlySet<string> = new Set<TableIntent['t']>([
   'startBattle',
   'newScenario',
   'stratReset',
+  'resolveBattle',
 ]);
 
 const BATTLE_INTENTS: ReadonlySet<string> = new Set<BattleIntent['t']>([
@@ -122,12 +143,17 @@ const STRAT_INTENTS: ReadonlySet<string> = new Set<StratIntent['t']>([
   'stratSplit',
   'stratSwapSide',
   'stratReorganize',
+  'stratFreeReorganize',
+  'stratDismissFreeReorg',
+  'stratBuildFort',
+  'stratInitiateBattle',
   'stratEndTurn',
 ]);
 
 const isTableIntent = (i: Intent): i is TableIntent => TABLE_INTENTS.has(i.t);
 const isBattleIntent = (i: Intent): i is BattleIntent => BATTLE_INTENTS.has(i.t);
 const isStratIntent = (i: Intent): i is StratIntent => STRAT_INTENTS.has(i.t);
+const isRetreatIntent = (i: Intent): i is RetreatIntent => i.t === 'stratRetreat';
 
 // --- Construction ------------------------------------------------------------
 
@@ -220,7 +246,16 @@ export function applyIntent(
       case 'newScenario':
         return commit(room, { ...room, battle: null, view: 'battle' });
       case 'stratReset':
-        return commit(room, { ...room, strategic: createStrategic() });
+        return commit(room, { ...room, strategic: createStrategic(rng) });
+      case 'resolveBattle': {
+        if (!room.battle) return { state: room, error: 'No battle to resolve.' };
+        if (room.battle.phase !== 'over') {
+          return { state: room, error: 'The battle is not finished.' };
+        }
+        const t = resolveBattle(room.strategic, room.battle);
+        if (t.error) return { state: room, error: t.error };
+        return commit(room, { ...room, strategic: t.state, battle: null, view: 'map' });
+      }
     }
   }
 
@@ -234,23 +269,49 @@ export function applyIntent(
   }
 
   if (isStratIntent(intent)) {
+    // A battle lifted off the map holds the strategic phase open until it is
+    // posted back — you cannot move armies while one is being fought.
+    if (room.battle?.node) {
+      return { state: room, error: 'Finish the battle on the board first.' };
+    }
     if (actor !== room.strategic.turn) {
       return { state: room, error: `It is ${playerLabel(room.strategic.turn)}'s turn.` };
     }
     switch (intent.t) {
       case 'stratMoveArmy':
-        return liftStrat(room, moveArmy(room.strategic, intent.armyId, intent.nodeId));
+        return liftStrat(room, moveArmy(room.strategic, intent.armyId, intent.nodeId, rng));
       case 'stratMoveLoose':
-        return liftStrat(room, moveLoose(room.strategic, intent.unitIds, intent.nodeId));
+        return liftStrat(room, moveLoose(room.strategic, intent.unitIds, intent.nodeId, rng));
       case 'stratSplit':
         return liftStrat(room, splitUnits(room.strategic, intent.unitIds));
       case 'stratSwapSide':
-        return liftStrat(room, swapSide(room.strategic, intent.nodeId));
+        return liftStrat(room, swapSide(room.strategic, intent.nodeId, rng));
       case 'stratReorganize':
-        return liftStrat(room, reorganize(room.strategic, intent.nodeId, intent.assign));
+        return liftStrat(room, reorganize(room.strategic, intent.nodeId, intent.assign, rng));
+      case 'stratFreeReorganize':
+        return liftStrat(room, freeReorganize(room.strategic, intent.nodeId, intent.assign));
+      case 'stratDismissFreeReorg':
+        return liftStrat(room, dismissFreeReorg(room.strategic, intent.nodeId));
+      case 'stratBuildFort':
+        return liftStrat(room, buildFort(room.strategic, intent.nodeId, rng));
+      case 'stratInitiateBattle': {
+        const { battle, error } = createBattleAt(room.strategic, intent.nodeId, actor);
+        if (error || !battle) return { state: room, error: error ?? 'Cannot start that battle.' };
+        return commit(room, { ...room, battle, view: 'battle' });
+      }
       case 'stratEndTurn':
-        return liftStrat(room, endTurn(room.strategic));
+        return liftStrat(room, endTurn(room.strategic, rng));
     }
+  }
+
+  // The retreat interrupt: only the beaten side, and only while one is pending.
+  if (isRetreatIntent(intent)) {
+    const pr = room.strategic.pendingRetreat;
+    if (!pr) return { state: room, error: 'No retreat is pending.' };
+    if (actor !== pr.player) {
+      return { state: room, error: `Waiting for ${playerLabel(pr.player)} to fall back.` };
+    }
+    return liftStrat(room, resolveRetreat(room.strategic, intent.nodeId));
   }
 
   return { state: room, error: 'Unknown intent.' };
@@ -267,6 +328,10 @@ export function applyIntent(
 export function entitledSeat(room: RoomState, intent: Intent): Player {
   if (isBattleIntent(intent) && room.battle) {
     return battleMover(room.battle) ?? room.battle.turn;
+  }
+  // A pending retreat is the loser's to resolve, not the current mover's.
+  if (isRetreatIntent(intent) && room.strategic.pendingRetreat) {
+    return room.strategic.pendingRetreat.player;
   }
   // Strategic intents, and table intents (which either seat may send).
   return room.strategic.turn;

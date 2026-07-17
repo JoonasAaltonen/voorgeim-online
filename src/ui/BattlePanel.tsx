@@ -166,18 +166,36 @@ function BattleControls({ battle }: { battle: BattleState }) {
 
 export function BattlePanel() {
   const battle = useSession((s) => s.room.battle);
+  const dispatch = useSession((s) => s.dispatch);
   const error = useSession((s) => s.error);
   const clearError = useSession((s) => s.clearError);
   const newScenario = useBattleStore((s) => s.newScenario);
   if (!battle) return null;
 
   const log = [...battle.log].reverse();
+  // A battle carrying a node was lifted off the strategic map; it goes back there
+  // rather than to the scenario builder, and its result is posted onto the map.
+  const fromMap = !!battle.node;
+  const over = battle.phase === 'over';
 
   return (
     <aside className="panel">
-      {battle.phase === 'over' && (
+      {over && (
         <div className="banner banner--win">
           {battle.winner === 'stalemate' ? 'Stalemate' : `${playerLabel(battle.winner!)} wins`}
+        </div>
+      )}
+
+      {fromMap && over && (
+        <div className="panel__section">
+          <p className="hint">
+            The result is ready to carry back to <b>{battle.node}</b>: the dead are removed, the
+            withdrawn scatter, survivors stay revealed until you re-hide them, and the loser falls
+            back.
+          </p>
+          <button type="button" className="btn" onClick={() => dispatch({ t: 'resolveBattle' })}>
+            Return to the map
+          </button>
         </div>
       )}
 
@@ -190,9 +208,11 @@ export function BattlePanel() {
         </div>
       )}
 
-      <button type="button" className="btn btn--ghost" onClick={newScenario}>
-        New scenario
-      </button>
+      {!fromMap && (
+        <button type="button" className="btn btn--ghost" onClick={newScenario}>
+          New scenario
+        </button>
+      )}
 
       <ol className="log">
         {log.map((e) => (

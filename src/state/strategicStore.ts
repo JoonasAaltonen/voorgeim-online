@@ -27,6 +27,8 @@ interface Store {
   inspectedNode: NodeId | null;
   /** Node whose reorganization table is open, if any. */
   reorgNode: NodeId | null;
+  /** Node whose *free* post-battle reorganization table is open, if any. */
+  freeReorgNode: NodeId | null;
 
   selectArmy: (armyId: string) => void;
   /** Add or remove a loose unit from the pair in hand. */
@@ -44,9 +46,20 @@ interface Store {
   openReorg: (id: NodeId) => void;
   closeReorg: () => void;
   reorganize: (assign: Reassignment) => void;
+  /** Open / commit / decline the winner's free post-battle reshuffle. */
+  openFreeReorg: (id: NodeId) => void;
+  closeFreeReorg: () => void;
+  commitFreeReorg: (assign: Reassignment) => void;
+  dismissFreeReorg: (nodeId: NodeId) => void;
   /** Cross to the other side of an asymmetric node. */
   swapSide: (nodeId: NodeId) => void;
   split: (unitIds: string[]) => void;
+  /** Build a fortification in the inspected node. */
+  fortify: (nodeId: NodeId) => void;
+  /** Attack the enemy sharing a node, opening the battle board. */
+  initiateBattle: (nodeId: NodeId) => void;
+  /** The beaten side names where to fall back to. */
+  retreat: (nodeId: NodeId) => void;
   endTurn: () => void;
   reset: () => void;
 }
@@ -55,6 +68,7 @@ export const useStrategicStore = create<Store>((set, get) => ({
   sel: null,
   inspectedNode: STAGING_NODE.p1,
   reorgNode: null,
+  freeReorgNode: null,
 
   selectArmy: (armyId) => {
     const cur = get().sel;
@@ -125,12 +139,40 @@ export const useStrategicStore = create<Store>((set, get) => ({
     session().dispatch({ t: 'stratReorganize', nodeId, assign });
   },
 
+  openFreeReorg: (id) => set({ freeReorgNode: id, sel: null }),
+  closeFreeReorg: () => set({ freeReorgNode: null }),
+  commitFreeReorg: (assign) => {
+    const nodeId = get().freeReorgNode;
+    if (!nodeId) return;
+    set({ freeReorgNode: null });
+    session().dispatch({ t: 'stratFreeReorganize', nodeId, assign });
+  },
+  dismissFreeReorg: (nodeId) => {
+    set({ freeReorgNode: null });
+    session().dispatch({ t: 'stratDismissFreeReorg', nodeId });
+  },
+
   swapSide: (nodeId) => {
     set({ sel: null });
     session().dispatch({ t: 'stratSwapSide', nodeId });
   },
 
   split: (unitIds) => session().dispatch({ t: 'stratSplit', unitIds }),
+
+  fortify: (nodeId) => {
+    set({ sel: null });
+    session().dispatch({ t: 'stratBuildFort', nodeId });
+  },
+
+  initiateBattle: (nodeId) => {
+    set({ sel: null });
+    session().dispatch({ t: 'stratInitiateBattle', nodeId });
+  },
+
+  retreat: (nodeId) => {
+    set({ inspectedNode: nodeId });
+    session().dispatch({ t: 'stratRetreat', nodeId });
+  },
 
   endTurn: () => session().dispatch({ t: 'stratEndTurn' }),
   reset: () => {

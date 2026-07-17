@@ -2,7 +2,9 @@
 // later, authoritative in the Durable Object (never rolled client-side).
 
 export type Rng = () => number;
-export const defaultRng: Rng = Math.random;
+// Deferred to the call, not bound at import, so a test can `vi.spyOn(Math,
+// 'random')` and have every default-RNG roll (initiative, combat) obey it.
+export const defaultRng: Rng = () => Math.random();
 
 export function rollD6(rng: Rng = defaultRng): number {
   return 1 + Math.floor(rng() * 6);

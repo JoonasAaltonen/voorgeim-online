@@ -3,7 +3,7 @@
 // together, and that clicking the node you already stand in means "put it down"
 // rather than a move the engine has to refuse.
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { STAGING_NODE, NODE_BY_ID } from '../engine/map';
 import { armiesAt, armyUnits, looseAt, reorganize, NEW_ARMY } from '../engine/strategic';
 import { useSession } from './sessionStore';
@@ -14,9 +14,17 @@ const store = () => useStrategicStore.getState();
 
 /** Rewind to a fresh local game between tests — these stores are module-level. */
 beforeEach(() => {
+  // Initiative is a dice roll; pin it so p1 always opens and these p1-centric
+  // tests are deterministic. Must be in place before the reset below rolls it.
+  let high = false;
+  vi.spyOn(Math, 'random').mockImplementation(() => {
+    high = !high;
+    return high ? 0.99 : 0;
+  });
   useStrategicStore.setState({ sel: null, inspectedNode: STAGING_NODE.p1, reorgNode: null });
   useSession.getState().dispatch({ t: 'stratReset' });
 });
+afterEach(() => vi.restoreAllMocks());
 
 describe('loose selection', () => {
   it('takes a second unit standing in the same node', () => {

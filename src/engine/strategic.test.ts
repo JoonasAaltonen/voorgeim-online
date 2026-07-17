@@ -2,7 +2,7 @@
 // (Phase 5). `map.test.ts` next door guards the map *data*; this file guards the
 // rules played on top of it.
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CONTESTED_NODES,
   NODE_BY_ID,
@@ -17,13 +17,21 @@ import {
   MAX_ARMIES,
   NEW_ARMY,
   SEA_SUPPLY,
+  HOLD_TO_WIN,
   armiesAt,
   armyCount,
   armyUnits,
+  buildFort,
+  canFortify,
+  canFreeReorg,
   canReorganize,
   controlFor,
   createStrategic,
+  dismissFreeReorg,
+  doorstep,
   endTurn,
+  fortsAt,
+  freeReorganize,
   legalArmyTargets,
   legalLooseTargets,
   looseAt,
@@ -70,6 +78,20 @@ function placeArmy(s: StrategicState, owner: Player, node: NodeId, n: number): s
   for (const u of place(s, owner, node, n)) u.armyId = id;
   return id;
 }
+
+// Initiative is a dice roll now, so an un-pinned RNG would make "whose turn is
+// it" random and half these tests flaky. Pin Math.random to a stateful stub that
+// always hands p1 the win (6 then 1, so `rollUntilDifferent` never ties) — turn
+// order becomes the clean p1→p2 alternation the rules tests below assume, while
+// production and the online game still roll for real.
+beforeEach(() => {
+  let high = false;
+  vi.spyOn(Math, 'random').mockImplementation(() => {
+    high = !high;
+    return high ? 0.99 : 0;
+  });
+});
+afterEach(() => vi.restoreAllMocks());
 
 const isPlain = (id: NodeId) => !isSea(id) && !NODE_BY_ID[id].staging;
 
@@ -649,5 +671,207 @@ describe('asymmetric node sides', () => {
     const t = moveArmy(s, a, inland.id);
     expect(sideOf(t.state, inland.id, 'p1')).toBe('p1');
     expect(sideOf(t.state, inland.id, 'p2')).toBe('p2');
+  });
+});
+
+// A deterministic dice sequence, to drive initiative on purpose (0 → rolls a 1,
+// 0.99 → rolls a 6). The module-level `beforeEach` pins Math.random, but these
+// pass an rng explicitly to steer who wins.
+function seqRng(...vals: number[]) {
+  let i = 0;
+  return () => vals[i++ % vals.length];
+}
+
+describe('initiative', () => {
+  it('hands the first turn to whoever wins the opening roll', () => {
+    const p2first = createStrategic(seqRng(0, 0.99)); // a=1, b=6 → p2
+    expect(p2first.turn).toBe('p2');
+    expect(p2first.firstPlayer).toBe('p2');
+    expect(p2first.round).toBe(1);
+  });
+
+  it('re-rolls each round, so a player can move on both sides of a round boundary', () => {
+    // p1 opens round 1; the round-boundary roll then makes p2 open round 2, so p2
+    // acts last in round 1 and first in round 2 — back to back.
+    const rng = seqRng(0.99, 0, /* round-2 roll: */ 0, 0.99);
+    let t: Transition = { state: createStrategic(rng) };
+    expect(t.state.turn).toBe('p1');
+    t = endTurn(t.state, rng); // p1 → p2, still round 1
+    expect(t.state.turn).toBe('p2');
+    expect(t.state.round).toBe(1);
+    t = endTurn(t.state, rng); // round boundary re-rolls to p2
+    expect(t.state.turn).toBe('p2');
+    expect(t.state.round).toBe(2);
+    expect(t.state.firstPlayer).toBe('p2');
+  });
+});
+
+describe('fortifications', () => {
+  it('can only be built on ground you hold an army in, never in staging', () => {
+    const s = createStrategic();
+    expect(canFortify(s, STAGING_NODE.p1, 'p1')).toBe(false); // staging excluded
+    expect(canFortify(s, inland.id, 'p1')).toBe(false); // no army there
+    placeArmy(s, 'p1', inland.id, 2);
+    expect(canFortify(s, inland.id, 'p1')).toBe(true);
+  });
+
+  it('costs an action and leaves a fort waiting for the next battle', () => {
+    const s = createStrategic();
+    placeArmy(s, 'p1', inland.id, 2);
+    const t = buildFort(s, inland.id);
+    expect(t.error).toBeUndefined();
+    expect(fortsAt(t.state, inland.id, 'p1')).toBe(1);
+    expect(t.state.actionsLeft).toBe(ACTIONS_PER_TURN - 1);
+  });
+
+  it('is removed once the last army leaves the node', () => {
+    const s = createStrategic();
+    const a = placeArmy(s, 'p1', inland.id, 2);
+    s.forts[`${inland.id}:p1`] = 1; // a fort waiting, as if built last turn
+    expect(fortsAt(s, inland.id, 'p1')).toBe(1);
+    const dest = NODE_BY_ID[inland.id].adjacency.find(isPlain)!;
+    const t = moveArmy(s, a, dest);
+    expect(fortsAt(t.state, inland.id, 'p1')).toBe(0);
+  });
+});
+
+describe('victory', () => {
+  it('names the ring of nodes around the enemy staging', () => {
+    expect(doorstep('p2')).toEqual(NODE_BY_ID[STAGING_NODE.p2].adjacency);
+    expect(doorstep('p2').length).toBeGreaterThan(0);
+  });
+
+  it('is won by holding the whole enemy doorstep for the required own turns', () => {
+    const s = createStrategic();
+    for (const n of doorstep('p2')) place(s, 'p1', n, 1);
+    let t: Transition = { state: s };
+    for (let i = 0; i < HOLD_TO_WIN * 2; i++) {
+      if (t.state.winner) break;
+      t = endTurn(t.state);
+    }
+    expect(t.state.winner).toBe('p1');
+  });
+
+  it('resets the count the moment the doorstep is relieved', () => {
+    const s = createStrategic();
+    const held = doorstep('p2').map((n) => place(s, 'p1', n, 1)[0]);
+    const t1 = endTurn(s).state; // p1 turn ends holding all → count 1
+    expect(t1.hold.p1).toBe(1);
+    // p1 abandons one doorstep node — mutate the forwarded state, since endTurn
+    // clones and the original `s` units are no longer the ones in play.
+    t1.units[held[0].id].nodeId = STAGING_NODE.p1;
+    const t2 = endTurn(t1).state; // p2's turn
+    const t3 = endTurn(t2).state; // p1's turn ends, no longer holding
+    expect(t3.hold.p1).toBe(0);
+    expect(t3.winner).toBeNull();
+  });
+});
+
+describe('wounded units heal only in staging', () => {
+  it('reinforces a wounded unit reorganized in the staging area', () => {
+    const s = createStrategic();
+    const [inf] = place(s, 'p1', STAGING_NODE.p1, 1);
+    inf.wounded = true;
+    inf.revealed = true;
+    const t = reorganize(s, STAGING_NODE.p1, { [inf.id]: NEW_ARMY });
+    expect(t.error).toBeUndefined();
+    expect(t.state.units[inf.id].wounded).toBeUndefined();
+    expect(t.state.units[inf.id].revealed).toBeUndefined();
+  });
+
+  it('keeps a wounded unit wounded and face-up when reorganized in the field', () => {
+    const s = createStrategic();
+    const a = placeArmy(s, 'p1', inland.id, 2);
+    const member = armyUnits(s, a)[0];
+    member.wounded = true;
+    expect(canReorganize(s, inland.id, 'p1')).toBe(true);
+    const t = reorganize(s, inland.id, { [member.id]: a });
+    expect(t.state.units[member.id].wounded).toBe(true);
+    expect(t.state.units[member.id].revealed).toBe(true);
+  });
+});
+
+describe('a decided or interrupted game freezes', () => {
+  it('refuses actions once someone has won', () => {
+    const s = createStrategic();
+    const a = placeArmy(s, 'p1', inland.id, 2);
+    s.winner = 'p1';
+    expect(moveArmy(s, a, NODE_BY_ID[inland.id].adjacency[0]).error).toMatch(/game is over/i);
+    expect(endTurn(s).error).toMatch(/game is over/i);
+  });
+
+  it('refuses actions while a retreat is pending', () => {
+    const s = createStrategic();
+    const a = placeArmy(s, 'p1', inland.id, 2);
+    s.pendingRetreat = { player: 'p2', from: inland.id, options: [NODE_BY_ID[inland.id].adjacency[0]] };
+    expect(moveArmy(s, a, NODE_BY_ID[inland.id].adjacency[0]).error).toMatch(/must retreat/i);
+  });
+});
+
+describe("the winner's free post-battle reshuffle", () => {
+  it('re-sorts organized survivors between armies for no action', () => {
+    const s = createStrategic();
+    const a = placeArmy(s, 'p1', inland.id, 3);
+    const b = placeArmy(s, 'p1', inland.id, 2);
+    s.freeReorgs[inland.id] = 'p1';
+    const fromA = armyUnits(s, a)[0];
+
+    const t = freeReorganize(s, inland.id, { [fromA.id]: b });
+    expect(t.error).toBeUndefined();
+    expect(t.state.actionsLeft).toBe(ACTIONS_PER_TURN); // free
+    expect(armyUnits(t.state, b)).toHaveLength(3);
+    expect(t.state.freeReorgs[inland.id]).toBeUndefined(); // spent
+  });
+
+  it('is offered only where a win was recorded, and only to the winner', () => {
+    const s = createStrategic();
+    placeArmy(s, 'p1', inland.id, 2);
+    expect(canFreeReorg(s, inland.id, 'p1')).toBe(false);
+    s.freeReorgs[inland.id] = 'p1';
+    expect(canFreeReorg(s, inland.id, 'p1')).toBe(true);
+    expect(canFreeReorg(s, inland.id, 'p2')).toBe(false);
+  });
+
+  it('will not fold a withdrawn (disorganized) unit back in for free', () => {
+    const s = createStrategic();
+    const a = placeArmy(s, 'p1', inland.id, 2);
+    const loose = place(s, 'p1', inland.id, 1)[0]; // a withdrawn unit, disorganized
+    s.freeReorgs[inland.id] = 'p1';
+    const t = freeReorganize(s, inland.id, { [loose.id]: a });
+    expect(t.error).toMatch(/withdrawn units need a full reorganization/i);
+  });
+
+  it('leaves the survivors revealed when the node is not controlled', () => {
+    const s = createStrategic();
+    // Contest inland so it cannot be controlled, and mark the army revealed.
+    place(s, 'p2', inland.adjacency[0], 1);
+    const a = placeArmy(s, 'p1', inland.id, 2);
+    const b = placeArmy(s, 'p1', inland.id, 2);
+    for (const u of armyUnits(s, a)) u.revealed = true;
+    s.freeReorgs[inland.id] = 'p1';
+    expect(controlFor(s, inland.id, 'p1')).toBe('contested');
+
+    const moved = armyUnits(s, a)[0];
+    const t = freeReorganize(s, inland.id, { [moved.id]: b });
+    expect(t.state.units[moved.id].revealed).toBe(true); // still face-up
+  });
+
+  it('can be declined, which simply clears the offer', () => {
+    const s = createStrategic();
+    placeArmy(s, 'p1', inland.id, 2);
+    s.freeReorgs[inland.id] = 'p1';
+    const t = dismissFreeReorg(s, inland.id);
+    expect(t.error).toBeUndefined();
+    expect(t.state.freeReorgs[inland.id]).toBeUndefined();
+  });
+
+  it('lapses once the winner marches an army off, leaving nothing to sort', () => {
+    const s = createStrategic();
+    placeArmy(s, 'p1', inland.id, 2);
+    const b = placeArmy(s, 'p1', inland.id, 2);
+    s.freeReorgs[inland.id] = 'p1';
+    const dest = NODE_BY_ID[inland.id].adjacency.find(isPlain)!;
+    const t = moveArmy(s, b, dest);
+    expect(t.state.freeReorgs[inland.id]).toBeUndefined();
   });
 });

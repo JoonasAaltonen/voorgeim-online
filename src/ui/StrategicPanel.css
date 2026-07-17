@@ -66,6 +66,59 @@
   font-size: 0.85rem;
 }
 .sbanner--err { background: rgba(255, 90, 90, 0.18); color: #ff9b9b; cursor: pointer; }
+.sbanner--win { font-size: 0.95rem; line-height: 1.5; padding: 14px 16px; }
+.sbanner--win.sbanner--p1 { background: rgba(var(--p1), 0.2); color: #f0b9d6; }
+.sbanner--win.sbanner--p2 { background: rgba(var(--p2), 0.2); color: #cdedaa; }
+
+/* The battle-initiation action is the loud one: it leaves the map for the board. */
+.sbtn--attack { background: #c0492e; }
+.sbtn--attack:hover { background: #d6543a; }
+
+/* The retreat interrupt — the one time the panel speaks to the player who is not
+   on the clock, so it wears their colour and sits at the very top. */
+.sretreat { border-color: #7a5a2a; }
+.sretreat--p1 { border-color: rgba(var(--p1), 0.5); }
+.sretreat--p2 { border-color: rgba(var(--p2), 0.5); }
+.sretreat__lead { margin: 0; font-size: 0.85rem; line-height: 1.5; color: #d7dce3; }
+.sretreat__opts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.sretreat__opts .sbtn { width: auto; margin: 0; }
+
+/* The winner's free post-battle reshuffle prompt. */
+.sreorg {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid #4a6a3a;
+  border-radius: 8px;
+  background: rgba(120, 180, 90, 0.08);
+}
+.sreorg__lead { margin: 0; font-size: 0.82rem; line-height: 1.5; color: #d7dce3; }
+.sreorg__opts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.sreorg__opts .sbtn { width: auto; margin: 0; }
+
+/* Fortifications waiting in a node for the next battle. */
+.fort {
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: #cbb487;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A wounded unit stays face-up on the map; the cross marks it apart. */
+.ustack--wounded { border-color: #c46c6c; }
+.ustack__wound {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #c0392b;
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 700;
+  line-height: 13px;
+  text-align: center;
+}
 
 /* One block per player within the inspected node. */
 .side {
@@ -219,3 +272,4 @@
 .slog li { padding: 1px 0; color: #b9bec6; }
 .slog__turn { color: #ffd08a; }
 .slog__info { color: #8b9098; font-style: italic; }
+.slog__battle { color: #e79b84; }

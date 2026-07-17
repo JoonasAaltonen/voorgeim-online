@@ -4,6 +4,13 @@
 //   Terminal 1:  npm run dev:worker
 //   Terminal 2:  npm run smoke
 //
+// Point it at a deployed origin to verify a release the same way:
+//
+//   npm run smoke -- https://voorgeim-online.<subdomain>.workers.dev
+//
+// Safe to run against production: it plays in a room of its own with a random
+// code, and touches nothing else.
+//
 // Covers what `room.test.ts` structurally cannot, because it needs real sockets
 // and a real DO: seat assignment, turning away a third player, the broadcast
 // fan-out, protocol-version refusal, and a game surviving a disconnect. It found
@@ -13,12 +20,20 @@
 // Not part of `npm test`: it needs a server running, and Vitest should stay
 // hermetic.
 
-const BASE = 'ws://127.0.0.1:8787/api/ws';
+// Default target is a local `dev:worker`; any origin may be passed instead.
+const TARGET = process.argv[2] ?? 'http://127.0.0.1:8787';
+const BASE = (() => {
+  const u = new URL('/api/ws', TARGET);
+  u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
+  return u.toString();
+})();
 // A fresh code per run: the code names the Durable Object, and its storage
 // outlives the process, so a fixed code would replay into last run's game.
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const CODE = Array.from({ length: 6 }, () => ALPHABET[(Math.random() * 32) | 0]).join('');
 const V = 1;
+
+console.log(`smoke: ${BASE}`);
 
 let failures = 0;
 const check = (ok, label) => {

@@ -6,8 +6,11 @@ import {
   armiesAt,
   armyCount,
   armyUnits,
+  canFortify,
+  canFreeReorg,
   canReorganize,
   controlFor,
+  fortsAt,
   looseAt,
   occupies,
   reconAt,
@@ -16,14 +19,13 @@ import {
   supplyUsed,
   type StrategicState,
 } from '../engine/strategic';
-import { coinAsset, otherPlayer, playerLabel, type Player } from '../engine/types';
+import { canInitiateBattle } from '../engine/campaign';
+import { PLAYERS, coinAsset, otherPlayer, playerLabel, type Player } from '../engine/types';
 import type { UnitType } from '../engine/units';
 import { useStrategicStore } from '../state/strategicStore';
 import { useSession } from '../state/sessionStore';
 import { ReorgDialog } from './ReorgDialog';
 import './StrategicPanel.css';
-
-const PLAYERS: Player[] = ['p1', 'p2'];
 
 const cap = (n: number) => (n === Infinity ? '∞' : n);
 
@@ -88,8 +90,9 @@ function NodeSide({ nodeId, owner, mine }: { nodeId: NodeId; owner: Player; mine
   const used = supplyUsed(s, nodeId, owner);
   const limit = supplyCap(s, nodeId, owner);
   const over = used > limit;
+  const forts = fortsAt(s, nodeId, owner);
 
-  if (armies.length === 0 && loose.length === 0 && recon.length === 0) {
+  if (armies.length === 0 && loose.length === 0 && recon.length === 0 && forts === 0) {
     return (
       <div className="side">
         <div className="side__head">
@@ -105,6 +108,11 @@ function NodeSide({ nodeId, owner, mine }: { nodeId: NodeId; owner: Player; mine
       <div className="side__head">
         <span className={`side__who side__who--${owner}`}>{playerLabel(owner)}</span>
         <span className="side__slots">
+          {forts > 0 && (
+            <span className="fort" title={`${forts} fortification${forts === 1 ? '' : 's'} ready for the next battle here`}>
+              ⛨ {forts}
+            </span>
+          )}
           <span className={`ctl ctl--${control}`}>{control}</span>
           <span className={over ? 'supply supply--over' : 'supply'}>
             {used} / {cap(limit)}
@@ -128,16 +136,18 @@ function NodeSide({ nodeId, owner, mine }: { nodeId: NodeId; owner: Player; mine
               // to be picked out individually.
               return ids.map((id) => {
                 const picked = sel?.kind === 'loose' && sel.unitIds.includes(id);
+                const wounded = !!s.units[id]?.wounded;
                 return (
                   <button
                     key={id}
                     type="button"
-                    className={`ustack ustack--loose${picked ? ' ustack--sel' : ''}`}
+                    className={`ustack ustack--loose${picked ? ' ustack--sel' : ''}${wounded ? ' ustack--wounded' : ''}`}
                     onClick={() => toggleLoose(id)}
                     disabled={!mine}
-                    title={type}
+                    title={wounded ? `${type} — wounded (heals only in staging)` : type}
                   >
                     <img src={coinAsset(type, owner)} alt={type} />
+                    {wounded && <span className="ustack__wound" aria-hidden>✚</span>}
                   </button>
                 );
               });
@@ -182,7 +192,13 @@ export function StrategicPanel() {
   const inspected = useStrategicStore((st) => st.inspectedNode);
   const reorgNode = useStrategicStore((st) => st.reorgNode);
   const openReorg = useStrategicStore((st) => st.openReorg);
+  const freeReorgNode = useStrategicStore((st) => st.freeReorgNode);
+  const openFreeReorg = useStrategicStore((st) => st.openFreeReorg);
+  const dismissFreeReorg = useStrategicStore((st) => st.dismissFreeReorg);
   const swapSide = useStrategicStore((st) => st.swapSide);
+  const initiateBattle = useStrategicStore((st) => st.initiateBattle);
+  const fortify = useStrategicStore((st) => st.fortify);
+  const retreat = useStrategicStore((st) => st.retreat);
   const error = useSession((st) => st.error);
   const clearError = useSession((st) => st.clearError);
   const endTurn = useStrategicStore((st) => st.endTurn);
@@ -203,9 +219,61 @@ export function StrategicPanel() {
     isAsymmetric(node.id) &&
     armiesAt(s, node.id, s.turn).length + looseAt(s, node.id, s.turn).length > 0 &&
     !occupies(s, node.id, otherPlayer(s.turn));
+  // Play is frozen while the game is decided or a beaten force still owes the
+  // board a destination — no node action should be offered in either case.
+  const live = !s.winner && !s.pendingRetreat;
+  const canAttack = !!node && yours && live && canInitiateBattle(s, node.id, s.turn);
+  const canFort = !!node && yours && live && canFortify(s, node.id, s.turn);
+  const owedFreeReorg = !!node && yours && live && canFreeReorg(s, node.id, s.turn);
+  const pr = s.pendingRetreat;
+  const myRetreat = !!pr && pr.player === eye;
+
+  if (s.winner) {
+    return (
+      <aside className="spanel">
+        <div className={`sbanner sbanner--win sbanner--${s.winner}`}>
+          <b>{playerLabel(s.winner)} wins.</b> They held every location on the enemy’s doorstep
+          long enough to take the game.
+        </div>
+        <button type="button" className="sbtn" onClick={reset}>
+          Start a new game
+        </button>
+        <ol className="slog">
+          {log.map((e) => (
+            <li key={e.id} className={`slog__${e.kind}`}>
+              {e.text}
+            </li>
+          ))}
+        </ol>
+      </aside>
+    );
+  }
 
   return (
     <aside className="spanel">
+      {pr && (
+        <div className={`spanel__section sretreat sretreat--${pr.player}`}>
+          {myRetreat ? (
+            <>
+              <p className="sretreat__lead">
+                <b>You lost the battle at {pr.from}.</b> Choose where your survivors fall back to.
+              </p>
+              <div className="sretreat__opts">
+                {pr.options.map((n) => (
+                  <button key={n} type="button" className="sbtn" onClick={() => retreat(n)}>
+                    Fall back to {n}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <p className="sretreat__lead">
+              Waiting for <b>{playerLabel(pr.player)}</b> to choose where to fall back from {pr.from}.
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="spanel__section">
         <div className={`sturn sturn--${s.turn}`}>
           Round {s.round} · <b>{playerLabel(s.turn)}</b> · {s.actionsLeft} of {ACTIONS_PER_TURN}{' '}
@@ -271,9 +339,42 @@ export function StrategicPanel() {
             <NodeSide key={p} nodeId={node.id} owner={p} mine={p === eye} />
           ))}
 
+          {/* The free post-battle reshuffle: offered prominently, because it is a
+              one-time right that is easy to forget and costs nothing. */}
+          {owedFreeReorg && (
+            <div className="sreorg">
+              <p className="sreorg__lead">
+                <b>You won here.</b> Re-sort the survivors into armies for free — the board can’t be
+                assumed to remember which was which.
+              </p>
+              <div className="sreorg__opts">
+                <button type="button" className="sbtn" onClick={() => openFreeReorg(node.id)}>
+                  Re-sort the victors
+                </button>
+                <button
+                  type="button"
+                  className="sbtn sbtn--ghost"
+                  onClick={() => dismissFreeReorg(node.id)}
+                >
+                  Leave them as they were
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Node-scoped actions live here rather than on the map: the map keeps
               to two gestures, and this panel already shows what the action acts
-              on. Phase 7's "attack the enemy sharing this node" joins them. */}
+              on. */}
+          {canAttack && (
+            <button type="button" className="sbtn sbtn--attack" onClick={() => initiateBattle(node.id)}>
+              Attack the enemy here — opens the battle board
+            </button>
+          )}
+          {canFort && (
+            <button type="button" className="sbtn" onClick={() => fortify(node.id)}>
+              Build a fortification (1 action)
+            </button>
+          )}
           {canSwap && (
             <button type="button" className="sbtn" onClick={() => swapSide(node.id)}>
               Cross to the {slotsFor(node.id, otherPlayer(mySide))}-slot side (1 action)
@@ -307,6 +408,7 @@ export function StrategicPanel() {
       </ol>
 
       {reorgNode && <ReorgDialog nodeId={reorgNode} />}
+      {freeReorgNode && <ReorgDialog nodeId={freeReorgNode} free />}
     </aside>
   );
 }

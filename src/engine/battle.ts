@@ -70,6 +70,12 @@ export interface BattleState {
   attacker: Player;
   defender: Player;
   turn: Player;
+  /**
+   * The strategic node this battle is being fought over, when it came from the
+   * map. Absent for a free-standing scenario battle. The result flows back to
+   * this node, so it has to be remembered here rather than out in the room.
+   */
+  node?: string;
   units: Record<string, BattleUnit>;
   /** Fortifications on the board, keyed by cell id. */
   forts: Record<string, Fort>;
@@ -164,20 +170,34 @@ function damageUnit(
 
 // --- construction ----------------------------------------------------------
 
-export function createBattle(sc: Scenario): BattleState {
+/**
+ * Assemble a battle from concrete units and fort counts. The one place a
+ * `BattleState` is born, so both a free-standing scenario and a battle lifted off
+ * the strategic map share the same deployment machinery — and, crucially, the map
+ * battle can hand in units that already carry their *strategic* ids, which is
+ * what lets the result be posted back to the right units afterwards.
+ */
+export function assembleBattle(params: {
+  attacker: Player;
+  units: BattleUnit[];
+  fortsLeft: Record<Player, number>;
+  firstDeployer: Player;
+  node?: string;
+}): BattleState {
   const units: Record<string, BattleUnit> = {};
-  for (const u of buildUnits(sc)) units[u.id] = u;
-  const fd = firstDeployer(sc);
+  for (const u of params.units) units[u.id] = u;
+  const fd = params.firstDeployer;
   const s: BattleState = {
     phase: 'deployment',
-    attacker: sc.attacker,
-    defender: otherPlayer(sc.attacker),
+    attacker: params.attacker,
+    defender: otherPlayer(params.attacker),
     turn: fd,
+    node: params.node,
     units,
     forts: {},
     fortsLeft: {
-      p1: Math.max(0, sc.sides.p1.fortifications ?? 0),
-      p2: Math.max(0, sc.sides.p2.fortifications ?? 0),
+      p1: Math.max(0, params.fortsLeft.p1),
+      p2: Math.max(0, params.fortsLeft.p2),
     },
     deploy: { row: 0, index: 0, firstDeployer: fd },
     winner: null,
@@ -186,6 +206,18 @@ export function createBattle(sc: Scenario): BattleState {
   };
   log(s, 'info', `Deployment begins — ${playerLabel(fd)} deploys first, front row.`);
   return s;
+}
+
+export function createBattle(sc: Scenario): BattleState {
+  return assembleBattle({
+    attacker: sc.attacker,
+    units: buildUnits(sc),
+    fortsLeft: {
+      p1: sc.sides.p1.fortifications ?? 0,
+      p2: sc.sides.p2.fortifications ?? 0,
+    },
+    firstDeployer: firstDeployer(sc),
+  });
 }
 
 // --- deployment ------------------------------------------------------------
@@ -274,8 +306,12 @@ function attackerHasDisengaged(s: BattleState): boolean {
   const units = deployedCombatUnits(s, s.attacker);
   if (units.length === 0) return false;
   if (!units.every((u) => !!u.cellId && CELL_BY_ID[u.cellId].row === BACK_ROW)) return false;
-  const sup = s.units[`${s.attacker}-support`];
-  return !sup || sup.status !== 'deployed';
+  // A map battle can offer several eligible guns (one per adjacent firing node),
+  // so this asks whether *any* of them is still shelling, not whether the one
+  // support unit is.
+  return !Object.values(s.units).some(
+    (u) => isSupportUnit(u) && u.owner === s.attacker && u.status === 'deployed',
+  );
 }
 
 /** The defender contests a stalemate by pushing units over the initial frontline. */

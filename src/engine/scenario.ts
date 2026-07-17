@@ -49,7 +49,14 @@ export function buildUnits(sc: Scenario): BattleUnit[] {
       },
     );
     if (side.support) {
-      units.push({ id: `${owner}-support`, type: 'artillery', owner, hp: UNIT_STATS.artillery.hp, status: 'reserve' });
+      units.push({
+        id: `${owner}-support`,
+        type: 'artillery',
+        owner,
+        hp: UNIT_STATS.artillery.hp,
+        status: 'reserve',
+        support: true,
+      });
     }
   });
   return units;

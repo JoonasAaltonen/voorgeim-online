@@ -40,17 +40,22 @@ interface Column {
 /** Armies have generated ids; players need a name they can hold in their head. */
 const armyName = (i: number) => `Army ${i + 1}`;
 
-export function ReorgDialog({ nodeId }: { nodeId: NodeId }) {
+export function ReorgDialog({ nodeId, free = false }: { nodeId: NodeId; free?: boolean }) {
   const s = useSession((st) => st.room.strategic);
-  const close = useStrategicStore((st) => st.closeReorg);
-  const commit = useStrategicStore((st) => st.reorganize);
+  const closeNormal = useStrategicStore((st) => st.closeReorg);
+  const closeFree = useStrategicStore((st) => st.closeFreeReorg);
+  const commitNormal = useStrategicStore((st) => st.reorganize);
+  const commitFree = useStrategicStore((st) => st.commitFreeReorg);
+  const close = free ? closeFree : closeNormal;
+  const commit = free ? commitFree : commitNormal;
 
   const player = s.turn;
   const armies = armiesAt(s, nodeId, player);
-  // Recon never joins an army, so it has no column it could belong in and is
-  // simply not part of this table.
+  // Recon never joins an army, so it is not part of this table. The free
+  // post-battle reshuffle covers only units that came back organized — a
+  // withdrawn unit is disorganized now and needs a full reorganization to re-form.
   const units = unitsAtFor(s, nodeId, player)
-    .filter((u) => !isRecon(u))
+    .filter((u) => !isRecon(u) && (!free || !!u.armyId))
     .sort((a, b) => a.type.localeCompare(b.type) || a.id.localeCompare(b.id));
 
   // The board opens showing the node exactly as it stands, so committing without
@@ -92,7 +97,7 @@ export function ReorgDialog({ nodeId }: { nodeId: NodeId }) {
       <div className="reorg__box">
         <div className="reorg__head">
           <b>
-            Reorganize —{' '}
+            {free ? 'Re-sort the victors' : 'Reorganize'} —{' '}
             {isStaging(nodeId) ? `${playerLabel(player)} staging area` : NODE_BY_ID[nodeId].id}
           </b>
           <button type="button" className="reorg__x" onClick={close} aria-label="Close">
@@ -101,8 +106,11 @@ export function ReorgDialog({ nodeId }: { nodeId: NodeId }) {
         </div>
 
         <p className="reorg__note">
-          Drag units between the columns, or click one and then click where it should go. One
-          action, and it may form <b>one</b> new army — however many units join it.
+          Drag units between the columns, or click one and then click where it should go. It may
+          form <b>one</b> new army — however many units join it.
+          {free
+            ? ' Free after the battle, and it costs no action; the survivors stay revealed unless this location is controlled.'
+            : ' One action.'}
           {!canForm && ` You already field ${MAX_ARMIES} armies, so no new one can form.`}
         </p>
 
@@ -200,7 +208,7 @@ export function ReorgDialog({ nodeId }: { nodeId: NodeId }) {
             Cancel
           </button>
           <button type="button" className="sbtn" onClick={() => commit(assign)}>
-            Reorganize (1 action)
+            {free ? 'Re-sort (free)' : 'Reorganize (1 action)'}
           </button>
         </div>
       </div>

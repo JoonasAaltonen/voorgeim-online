@@ -5,6 +5,9 @@ import type { UnitType } from './units';
 
 export type Player = 'p1' | 'p2';
 
+/** Both seats, for the many rules that must be asked about each in turn. */
+export const PLAYERS: readonly Player[] = ['p1', 'p2'];
+
 /**
  * The result of applying an intent to a state: the next state, plus the reason
  * it was rejected. On rejection the state is returned unchanged.
@@ -42,10 +45,18 @@ export interface BattleUnit {
   /** Cell id it currently occupies while deployed. */
   cellId?: string;
   status: UnitStatus;
+  /**
+   * This artillery is here as off-grid indirect fire support, not as a unit on
+   * the grid. A flag rather than an id convention because a battle fought from
+   * the strategic map carries the *map* unit's id — the support gun is a real
+   * artillery standing in a real adjacent node, and it has to keep its identity
+   * to be sent home again afterwards.
+   */
+  support?: boolean;
 }
 
 /** True for the off-grid indirect-fire support artillery. */
-export const isSupportUnit = (u: BattleUnit): boolean => u.id.endsWith('-support');
+export const isSupportUnit = (u: BattleUnit): boolean => !!u.support;
 
 /** Coin image url for a unit, using the synced asset naming convention. */
 export function coinAsset(type: UnitType | 'unknown' | 'wounded', owner: Player): string {

@@ -13,7 +13,7 @@
     "cf-types": "wrangler types",
     "//dev:worker": "The full stack locally: builds the client, then serves it and the Durable Object from one origin, as in production. Plain `dev` is client-only and stays hotseat.",
     "dev:worker": "npm run build && wrangler dev",
-    "//smoke": "End-to-end socket test against a running `dev:worker`. Not in `test` — it needs a server.",
+    "//smoke": "End-to-end socket test against a running `dev:worker`, or any origin passed as an argument (`npm run smoke -- https://…`). Not in `test` — it needs a server.",
     "smoke": "node tools/smoke-worker.mjs",
     "deploy": "npm run build && wrangler deploy"
   },
