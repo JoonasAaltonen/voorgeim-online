@@ -31,7 +31,16 @@ import {
   type Transition as BattleTransition,
 } from './battle';
 import type { StrategicState, Transition as StratTransition } from './strategic';
-import { createStrategic, endTurn, moveUnit } from './strategic';
+import {
+  createStrategic,
+  endTurn,
+  moveArmy,
+  moveLoose,
+  reorganize,
+  splitUnits,
+  swapSide,
+  type Reassignment,
+} from './strategic';
 import type { NodeId } from './map';
 import { defaultRng, type Rng } from './dice';
 
@@ -77,7 +86,11 @@ type BattleIntent =
 
 /** Acting on the strategic map — only the player whose turn it is. */
 type StratIntent =
-  | { t: 'stratMove'; unitId: string; nodeId: NodeId }
+  | { t: 'stratMoveArmy'; armyId: string; nodeId: NodeId }
+  | { t: 'stratMoveLoose'; unitIds: string[]; nodeId: NodeId }
+  | { t: 'stratSplit'; unitIds: string[] }
+  | { t: 'stratSwapSide'; nodeId: NodeId }
+  | { t: 'stratReorganize'; nodeId: NodeId; assign: Reassignment }
   | { t: 'stratEndTurn' };
 
 export type Intent = TableIntent | BattleIntent | StratIntent;
@@ -104,7 +117,11 @@ const BATTLE_INTENTS: ReadonlySet<string> = new Set<BattleIntent['t']>([
 ]);
 
 const STRAT_INTENTS: ReadonlySet<string> = new Set<StratIntent['t']>([
-  'stratMove',
+  'stratMoveArmy',
+  'stratMoveLoose',
+  'stratSplit',
+  'stratSwapSide',
+  'stratReorganize',
   'stratEndTurn',
 ]);
 
@@ -221,8 +238,16 @@ export function applyIntent(
       return { state: room, error: `It is ${playerLabel(room.strategic.turn)}'s turn.` };
     }
     switch (intent.t) {
-      case 'stratMove':
-        return liftStrat(room, moveUnit(room.strategic, intent.unitId, intent.nodeId));
+      case 'stratMoveArmy':
+        return liftStrat(room, moveArmy(room.strategic, intent.armyId, intent.nodeId));
+      case 'stratMoveLoose':
+        return liftStrat(room, moveLoose(room.strategic, intent.unitIds, intent.nodeId));
+      case 'stratSplit':
+        return liftStrat(room, splitUnits(room.strategic, intent.unitIds));
+      case 'stratSwapSide':
+        return liftStrat(room, swapSide(room.strategic, intent.nodeId));
+      case 'stratReorganize':
+        return liftStrat(room, reorganize(room.strategic, intent.nodeId, intent.assign));
       case 'stratEndTurn':
         return liftStrat(room, endTurn(room.strategic));
     }

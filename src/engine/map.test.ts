@@ -1,26 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ASYM_ENTRY,
   CONTESTED_NODES,
   MAP,
   NODE_BY_ID,
   STAGING_NODE,
   arePathLinked,
+  entrySide,
   indirectFireOrigins,
-  isSea,
+  isAsymmetric,
   slotsFor,
   spotsFor,
 } from './map';
-import {
-  ACTIONS_PER_TURN,
-  createStrategic,
-  endTurn,
-  legalMoveTargets,
-  moveUnit,
-  unitsAt,
-  type StrategicState,
-  type Transition,
-} from './strategic';
-import { STARTING_ARMY } from './units';
 
 // These guard the extraction as much as the code: if a re-export of the Figma
 // map silently changes the graph, the counts below are what will notice.
@@ -120,89 +111,68 @@ describe('map data', () => {
   });
 });
 
-describe('strategic movement', () => {
-  const first = (s: StrategicState, owner: 'p1' | 'p2' = 'p1') =>
-    Object.values(s.units).find((u) => u.owner === owner)!;
-
-  it('musters both full rosters in their staging areas', () => {
-    const s = createStrategic();
-    const perPlayer = Object.values(STARTING_ARMY).reduce((a, b) => a + b, 0);
-    expect(perPlayer).toBe(25);
-    expect(Object.keys(s.units)).toHaveLength(perPlayer * 2);
-    expect(unitsAt(s, STAGING_NODE.p1)).toHaveLength(perPlayer);
-    expect(unitsAt(s, STAGING_NODE.p2)).toHaveLength(perPlayer);
-    expect(s.turn).toBe('p1');
-    expect(s.actionsLeft).toBe(ACTIONS_PER_TURN);
+// The entry table is hand-written against a drawing, so it is exactly the kind of
+// data that rots silently when the map is re-exported. These check it against the
+// graph rather than trusting it.
+describe('asymmetric entry sides', () => {
+  it('covers every asymmetric node, and only those', () => {
+    const asym = CONTESTED_NODES.filter((n) => n.asymmetric).map((n) => n.id);
+    expect(asym).toHaveLength(6);
+    expect(Object.keys(ASYM_ENTRY).sort()).toEqual([...asym].sort());
   });
 
-  it('offers exactly the path-adjacent nodes as legal targets', () => {
-    const s = createStrategic();
-    const u = first(s);
-    expect(legalMoveTargets(s, u.id).sort()).toEqual([...NODE_BY_ID[u.nodeId].adjacency].sort());
+  it('names every neighbour of each asymmetric node, and nothing that is not one', () => {
+    for (const [id, table] of Object.entries(ASYM_ENTRY)) {
+      const adj = [...NODE_BY_ID[id].adjacency].sort();
+      expect(Object.keys(table).sort()).toEqual(adj);
+    }
   });
 
-  it('moves a unit along a path and spends one action', () => {
-    const s = createStrategic();
-    const u = first(s);
-    const to = NODE_BY_ID[u.nodeId].adjacency[0];
-    const t = moveUnit(s, u.id, to);
-    expect(t.error).toBeUndefined();
-    expect(t.state.units[u.id].nodeId).toBe(to);
-    expect(t.state.actionsLeft).toBe(ACTIONS_PER_TURN - 1);
-    expect(s.units[u.id].nodeId).toBe(STAGING_NODE.p1); // caller's state untouched
+  it('uses both sides of every asymmetric node — a table that always answered the same way would be a bug', () => {
+    for (const table of Object.values(ASYM_ENTRY)) {
+      expect(new Set(Object.values(table)).size).toBe(2);
+    }
   });
 
-  it('blocks a jump to a node with no movement path', () => {
-    const s = createStrategic();
-    const u = first(s);
-    const far = CONTESTED_NODES.find(
-      (n) => n.id !== u.nodeId && !arePathLinked(u.nodeId, n.id),
-    )!;
-    const t = moveUnit(s, u.id, far.id);
-    expect(t.error).toMatch(/no movement path/i);
-    expect(t.state).toBe(s);
+  it('gives the wide side to exactly one approach in the coastal pair', () => {
+    // n01/n03: the sea lands on the 2-slot side, the land route on the single one.
+    for (const id of ['n01', 'n03']) {
+      const sea = NODE_BY_ID[id].adjacency.find((a) => NODE_BY_ID[a].sea)!;
+      const land = NODE_BY_ID[id].adjacency.find((a) => !NODE_BY_ID[a].sea)!;
+      expect(slotsFor(id, entrySide(id, sea)!)).toBe(2);
+      expect(slotsFor(id, entrySide(id, land)!)).toBe(1);
+    }
   });
 
-  it("blocks moving the opponent's unit", () => {
-    const s = createStrategic();
-    const enemy = first(s, 'p2');
-    const t = moveUnit(s, enemy.id, NODE_BY_ID[enemy.nodeId].adjacency[0]);
-    expect(t.error).toMatch(/P1 - Red's turn/);
-    expect(t.state).toBe(s);
+  it('gives each big node its 3-slot side to its own staging area alone', () => {
+    for (const [id, owner] of [
+      ['n12', 'p1'],
+      ['n18', 'p2'],
+    ] as const) {
+      const staging = STAGING_NODE[owner];
+      expect(entrySide(id, staging)).toBe(owner);
+      expect(slotsFor(id, entrySide(id, staging)!)).toBe(3);
+      for (const other of NODE_BY_ID[id].adjacency.filter((a) => a !== staging)) {
+        expect(slotsFor(id, entrySide(id, other)!)).toBe(2);
+      }
+    }
   });
 
-  it('hands over after two actions and stops accepting a third', () => {
-    let t: Transition = { state: createStrategic() };
-    const [a, b] = Object.values(t.state.units).filter((u) => u.owner === 'p1');
-    t = moveUnit(t.state, a.id, NODE_BY_ID[a.nodeId].adjacency[0]);
-    t = moveUnit(t.state, b.id, NODE_BY_ID[b.nodeId].adjacency[0]);
-    expect(t.state.turn).toBe('p2');
-    expect(t.state.actionsLeft).toBe(ACTIONS_PER_TURN);
-
-    const c = Object.values(t.state.units).find((u) => u.owner === 'p1' && u.id !== a.id)!;
-    const denied = moveUnit(t.state, c.id, NODE_BY_ID[c.nodeId].adjacency[0]);
-    expect(denied.error).toMatch(/P2 - Green's turn/);
+  it('gives n19 and n25 their 2-slot side to the rear approach only', () => {
+    for (const [id, rear] of [
+      ['n19', 'n23'],
+      ['n25', 'n27'],
+    ] as const) {
+      expect(slotsFor(id, entrySide(id, rear)!)).toBe(2);
+      for (const other of NODE_BY_ID[id].adjacency.filter((a) => a !== rear)) {
+        expect(slotsFor(id, entrySide(id, other)!)).toBe(1);
+      }
+    }
   });
 
-  it('counts a round only when play returns to p1', () => {
-    let t: Transition = { state: createStrategic() };
-    expect(t.state.round).toBe(1);
-    t = endTurn(t.state);
-    expect(t.state.turn).toBe('p2');
-    expect(t.state.round).toBe(1);
-    t = endTurn(t.state);
-    expect(t.state.turn).toBe('p1');
-    expect(t.state.round).toBe(2);
-  });
-
-  it('lets land units transit sea nodes', () => {
-    const seaNode = CONTESTED_NODES.find((n) => n.sea)!;
-    const land = seaNode.adjacency.find((id) => !isSea(id))!;
-    const s = createStrategic();
-    const u = first(s);
-    s.units[u.id].nodeId = land;
-    const t = moveUnit(s, u.id, seaNode.id);
-    expect(t.error).toBeUndefined();
-    expect(t.state.units[u.id].nodeId).toBe(seaNode.id);
+  it('has nothing to say about symmetric nodes', () => {
+    const sym = CONTESTED_NODES.find((n) => !n.asymmetric)!;
+    expect(isAsymmetric(sym.id)).toBe(false);
+    expect(entrySide(sym.id, sym.adjacency[0])).toBeNull();
   });
 });

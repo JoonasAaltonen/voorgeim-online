@@ -1,0 +1,135 @@
+.reorg {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(10, 11, 13, 0.7);
+}
+
+.reorg__box {
+  width: min(760px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  border: 1px solid #3a3d44;
+  border-radius: 12px;
+  background: #23252a;
+}
+
+/* Everything except the board keeps its natural height; the board is the only
+   part allowed to give, so the commit buttons can never leave the screen. */
+.reorg__head,
+.reorg__note,
+.reorg__supply,
+.reorg__actions {
+  flex-shrink: 0;
+}
+
+.reorg__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.95rem;
+}
+.reorg__x {
+  border: none;
+  background: transparent;
+  color: #8b9098;
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 2px 6px;
+}
+
+.reorg__note {
+  margin: 0;
+  color: #8b9098;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.reorg__board {
+  flex: 1 1 auto;
+  /* A flex item's min-height is `auto` by default, so without this the columns
+     refuse to shrink and push the buttons off screen — which is what 25 units in
+     a staging area did. */
+  min-height: 120px;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.rcol {
+  flex: 1 0 132px;
+  min-width: 132px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid #2c2f35;
+  border-radius: 8px;
+  background: #1a1c20;
+}
+/* Only worth signposting as a target while something is actually in hand. */
+.rcol--open { border-style: dashed; border-color: #4a4f58; cursor: pointer; }
+.rcol--over { border-style: solid; border-color: #ffd54a; background: #201f1a; }
+
+.rcol__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+.rcol__name { font-size: 0.78rem; font-weight: 600; }
+.rcol__n {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #c7ccd3;
+  font-variant-numeric: tabular-nums;
+}
+.rcol__hint { font-size: 0.62rem; color: #6d727a; font-style: italic; }
+
+.rcol__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 4px;
+  margin-top: 6px;
+}
+.rcol__empty { color: #4a4f58; font-size: 0.8rem; }
+
+.rchip {
+  padding: 2px;
+  border: 1px solid #3a3d44;
+  border-radius: 7px;
+  background: #1c1e22;
+  cursor: grab;
+  line-height: 0;
+}
+.rchip img {
+  width: 28px;
+  height: 28px;
+  display: block;
+  /* Keeps drag enter/leave on the column rather than the image inside it. */
+  pointer-events: none;
+}
+.rchip--held { border-color: #ffd54a; box-shadow: 0 0 0 1px #ffd54a; cursor: grabbing; }
+
+.reorg__supply {
+  font-size: 0.78rem;
+  color: #8b9098;
+  font-variant-numeric: tabular-nums;
+}
+.reorg__supply--over { color: #ffce7a; }
+
+.reorg__actions {
+  display: flex;
+  gap: 8px;
+}
+.reorg__actions .sbtn { margin: 0; }

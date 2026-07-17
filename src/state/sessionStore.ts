@@ -56,6 +56,14 @@ function recall(): Saved | null {
 
 interface Session {
   mode: Mode;
+  /**
+   * The room code, known the moment we decide to connect — deliberately *not*
+   * read off `room.code`. The room is the server's answer and only arrives with
+   * `welcome`, so sourcing the code from it means the code you have to read
+   * aloud to someone is blank (or worse, still says LOCAL) until the server
+   * replies, and stays wrong forever if it never does.
+   */
+  code: string;
   room: RoomState;
   /** The seat you hold online. Null in hotseat, where you hold both. */
   seat: Player | null;
@@ -79,14 +87,40 @@ interface Session {
 let conn: RoomConnection | null = null;
 
 export const useSession = create<Session>((set, get) => {
+  /** Fall back to hotseat, keeping `why` on screen. */
+  function toLocal(why: string | null): void {
+    conn = null;
+    remember(null);
+    set({
+      mode: 'local',
+      code: LOCAL_CODE,
+      room: createRoom(LOCAL_CODE),
+      seat: null,
+      seats: [],
+      status: null,
+      notice: null,
+      error: why,
+    });
+  }
+
   function connect(code: string, seat: Player | null): void {
     conn?.close();
     remember({ code, seat });
-    set({ mode: 'online', seats: [], error: null, notice: null });
+    set({ mode: 'online', code, seats: [], error: null, notice: null });
     conn = new RoomConnection(
       code,
       {
-        onStatus: (status, detail) => set({ status, notice: detail ?? null }),
+        onStatus: (status, detail) => {
+          // A close that carries a reason and never got us a seat means there is
+          // no game here to wait for: the server is unreachable, or the room
+          // refused us. Sitting in a dead online mode helps nobody — and leaving
+          // the code in sessionStorage would have every later reload retry it.
+          if (status === 'closed' && detail && !get().seat) {
+            toLocal(detail);
+            return;
+          }
+          set({ status, notice: detail ?? null });
+        },
         onWelcome: (seat, seats, room) => {
           remember({ code, seat });
           set({ seat, seats, room, notice: null });
@@ -101,6 +135,7 @@ export const useSession = create<Session>((set, get) => {
 
   return {
     mode: 'local',
+    code: LOCAL_CODE,
     room: createRoom(LOCAL_CODE),
     seat: null,
     seats: [],
@@ -142,17 +177,7 @@ export const useSession = create<Session>((set, get) => {
 
     leave: () => {
       conn?.close();
-      conn = null;
-      remember(null);
-      set({
-        mode: 'local',
-        room: createRoom(LOCAL_CODE),
-        seat: null,
-        seats: [],
-        status: null,
-        notice: null,
-        error: null,
-      });
+      toLocal(null);
     },
 
     clearError: () => set({ error: null }),

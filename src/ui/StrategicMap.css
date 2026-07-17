@@ -47,22 +47,53 @@
   pointer-events: none;
 }
 
-.smap__coin { cursor: pointer; }
-.smap__coin--sel {
-  outline: 3px solid #ffd54a;
-  outline-offset: 1px;
-  border-radius: 50%;
-}
-
-/* Overflow marker when a side holds more units than it has division spots. */
-.smap__more circle { fill: #23252a; stroke: #ffd54a; stroke-width: 1.5; }
-.smap__more text {
-  fill: #ffd54a;
-  font-size: 16px;
-  font-weight: 700;
-  text-anchor: middle;
+/* A node this side controls: rear area, double supply, reorganizing allowed.
+   Reads like the inspect highlight, but in the holder's colour rather than amber
+   — amber is "what you are pointing at", this is "whose ground this is". Kept
+   softer than the amber so the two can sit on the same node without arguing. */
+.smap__held {
+  stroke-width: 3;
   pointer-events: none;
 }
+.smap__held--p1 { fill: rgba(var(--p1), 0.09); stroke: rgba(var(--p1), 0.55); }
+.smap__held--p2 { fill: rgba(var(--p2), 0.09); stroke: rgba(var(--p2), 0.55); }
+
+/* Recon: shown as its own coin, since it is neither an army nor a straggler. */
+.smap__recon { opacity: 0.95; pointer-events: none; }
+
+/* One chip per army, carrying its strength — see the note in StrategicMap.tsx. */
+.smap__army rect {
+  fill: #1b1d21;
+  stroke-width: 3;
+}
+.smap__army text {
+  text-anchor: middle;
+  font-size: 21px;
+  font-weight: 700;
+  fill: #f2f2f2;
+  pointer-events: none;
+}
+.smap__army--p1 rect { stroke: #c46c9c; }
+.smap__army--p2 rect { stroke: #9cc46c; }
+.smap__army--mine { cursor: pointer; }
+.smap__army--sel rect { fill: #3a3527; stroke: #ffd54a; }
+
+/* Disorganized units pile up rather than hold ground, so: no frame, dashed. */
+.smap__loose circle {
+  fill: #16171a;
+  stroke-width: 2;
+  stroke-dasharray: 4 4;
+}
+.smap__loose text {
+  text-anchor: middle;
+  font-size: 14px;
+  font-weight: 700;
+  pointer-events: none;
+}
+.smap__loose--p1 circle { stroke: rgba(196, 108, 156, 0.75); }
+.smap__loose--p2 circle { stroke: rgba(156, 196, 108, 0.75); }
+.smap__loose--p1 text { fill: #d98cb6; }
+.smap__loose--p2 text { fill: #b6d98c; }
 
 .smap__stage circle {
   fill: rgba(172, 103, 126, 0.9);
@@ -77,5 +108,6 @@
 }
 .smap__stage--p1 circle { stroke: #C46C9C; }
 .smap__stage--p2 circle { stroke: #9CC46C; }
-.smap__stage text:first-of-type { font-size: 22px; }
-.smap__stagecount { font-size: 26px; }
+.smap__stage text:first-of-type { font-size: 20px; }
+.smap__stagecount { font-size: 24px; }
+.smap__stagearmies { font-size: 13px; opacity: 0.75; font-weight: 600; }

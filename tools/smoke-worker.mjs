@@ -81,13 +81,13 @@ async function main() {
 
   // 3. p2 tries to move on p1's turn — the core authority rule, over a real socket.
   const unit = Object.values(wa.room.strategic.units).find((u) => u.owner === 'p1');
-  send(b, { t: 'stratMove', unitId: unit.id, nodeId: 'n12' });
+  send(b, { t: 'stratMoveLoose', unitIds: [unit.id], nodeId: 'n12' });
   const rej = await next(b, 'reject');
   check(rej?.reason === "It is P1 - Red's turn.", `p2 is refused on p1's turn (got ${rej?.reason})`);
   check((await next(a, 'room', 300)) === null, 'a refused move broadcasts nothing to p1');
 
   // 4. p1 makes the same move — both sockets see it.
-  send(a, { t: 'stratMove', unitId: unit.id, nodeId: 'n12' });
+  send(a, { t: 'stratMoveLoose', unitIds: [unit.id], nodeId: 'n12' });
   const ra = await next(a, 'room');
   const rb = await next(b, 'room');
   check(ra?.room.strategic.units[unit.id].nodeId === 'n12', 'p1 move accepted');

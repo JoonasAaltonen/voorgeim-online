@@ -60,7 +60,7 @@ describe('seat authority — strategic', () => {
     const r = room();
     const unit = unitsAt(r.strategic, STAGING_NODE.p1)[0];
     // p1's unit, p1's turn — but p2 is the one asking.
-    const t = applyIntent(r, 'p2', { t: 'stratMove', unitId: unit.id, nodeId: 'n12' });
+    const t = applyIntent(r, 'p2', { t: 'stratMoveLoose', unitIds: [unit.id], nodeId: 'n12' });
     expect(t.error).toBe("It is P1 - Red's turn.");
     expect(t.state.strategic.units[unit.id].nodeId).toBe(STAGING_NODE.p1);
   });
@@ -68,7 +68,7 @@ describe('seat authority — strategic', () => {
   it('accepts the same move from the seat whose turn it is', () => {
     const r = room();
     const unit = unitsAt(r.strategic, STAGING_NODE.p1)[0];
-    const t = applyIntent(r, 'p1', { t: 'stratMove', unitId: unit.id, nodeId: 'n12' });
+    const t = applyIntent(r, 'p1', { t: 'stratMoveLoose', unitIds: [unit.id], nodeId: 'n12' });
     expect(t.error).toBeUndefined();
     expect(t.state.strategic.units[unit.id].nodeId).toBe('n12');
   });
@@ -76,15 +76,15 @@ describe('seat authority — strategic', () => {
   it("still blocks moving the opponent's unit on your own turn", () => {
     const r = room();
     const enemy = unitsAt(r.strategic, STAGING_NODE.p2)[0];
-    expect(applyIntent(r, 'p1', { t: 'stratMove', unitId: enemy.id, nodeId: 'n18' }).error).toBeDefined();
+    expect(applyIntent(r, 'p1', { t: 'stratMoveLoose', unitIds: [enemy.id], nodeId: 'n18' }).error).toBeDefined();
   });
 
   it('hands the seat over with the turn', () => {
     const r = applyIntent(room(), 'p1', { t: 'stratEndTurn' }).state;
     expect(r.strategic.turn).toBe('p2');
     const unit = unitsAt(r.strategic, STAGING_NODE.p2)[0];
-    expect(applyIntent(r, 'p1', { t: 'stratMove', unitId: unit.id, nodeId: 'n18' }).error).toBeDefined();
-    expect(applyIntent(r, 'p2', { t: 'stratMove', unitId: unit.id, nodeId: 'n18' }).error).toBeUndefined();
+    expect(applyIntent(r, 'p1', { t: 'stratMoveLoose', unitIds: [unit.id], nodeId: 'n18' }).error).toBeDefined();
+    expect(applyIntent(r, 'p2', { t: 'stratMoveLoose', unitIds: [unit.id], nodeId: 'n18' }).error).toBeUndefined();
   });
 });
 

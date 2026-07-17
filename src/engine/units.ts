@@ -46,6 +46,13 @@ export const STARTING_ARMY: Record<UnitType, number> = {
   recon: 2,
 };
 
+/**
+ * Recon: exists only on the strategic map, never fights, never joins an army,
+ * and is invisible to the supply and control system. `mapOnly` is the flag; this
+ * is the question the rest of the code actually asks.
+ */
+export const isMapOnly = (t: UnitType): boolean => !!UNIT_STATS[t].mapOnly;
+
 /** Attack value a unit deals against a given target class (base damage). */
 export function baseDamageVs(attacker: UnitType, target: TargetClass): number {
   const s = UNIT_STATS[attacker];

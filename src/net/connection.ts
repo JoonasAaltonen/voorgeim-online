@@ -26,6 +26,25 @@ export interface ConnHandlers {
 /** Backoff for reconnects, in ms. Caps out rather than growing forever. */
 const BACKOFF = [500, 1000, 2000, 4000, 8000];
 
+/**
+ * How many times to try a socket that has *never* opened before calling it.
+ * A connection that dropped mid-game is worth retrying indefinitely — the server
+ * may be redeploying and there is a real game to get back to. One that never
+ * opened at all has no game behind it and almost always means nothing is
+ * listening (in dev: `npm run dev` without the worker), so retrying forever just
+ * buries the console in refusals.
+ */
+const COLD_ATTEMPTS = 5;
+
+/**
+ * In dev this is nearly always the same mistake — `npm run dev` is Vite alone, so
+ * nothing is listening on the port its /api proxy forwards to. Say so, rather
+ * than making the reader rediscover it.
+ */
+const UNREACHABLE = import.meta.env.DEV
+  ? 'Could not reach the game server — online play needs `npm run dev:worker`.'
+  : 'Could not reach the game server.';
+
 /** A refusal we must not retry: reconnecting would fail identically forever. */
 const FATAL: readonly number[] = [CLOSE.ROOM_FULL, CLOSE.VERSION_MISMATCH];
 
@@ -45,6 +64,8 @@ export class RoomConnection {
   private attempt = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private closedByUs = false;
+  /** Whether this connection has ever reached the server — see COLD_ATTEMPTS. */
+  private everOpen = false;
   readonly code: string;
   private readonly handlers: ConnHandlers;
   /** Remembered so a reconnect asks for the same side. */
@@ -64,6 +85,7 @@ export class RoomConnection {
 
     ws.onopen = () => {
       this.attempt = 0;
+      this.everOpen = true;
       this.handlers.onStatus('open');
     };
 
@@ -96,6 +118,10 @@ export class RoomConnection {
       if (this.closedByUs) return;
       if (FATAL.includes(ev.code)) {
         this.handlers.onStatus('closed', ev.reason || 'The room refused the connection.');
+        return;
+      }
+      if (!this.everOpen && this.attempt >= COLD_ATTEMPTS) {
+        this.handlers.onStatus('closed', UNREACHABLE);
         return;
       }
       const wait = BACKOFF[Math.min(this.attempt, BACKOFF.length - 1)];

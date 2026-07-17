@@ -82,9 +82,100 @@
 .side__who { font-size: 0.72rem; font-weight: 700; padding: 1px 5px; border-radius: 3px; }
 .side__who--p1 { background: rgba(var(--p1), 0.22); color: #d98cb6; }
 .side__who--p2 { background: rgba(var(--p2), 0.22); color: #b6d98c; }
-.side__slots { font-size: 0.75rem; color: #8b9098; }
+.side__slots { display: flex; align-items: center; gap: 6px; font-size: 0.7rem; color: #8b9098; }
 .side__empty { margin: 0; font-size: 0.78rem; color: #6d727a; font-style: italic; }
 .side__units { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* Control is a supply fact, not a battle role — hence neutral chrome rather than
+   the attacker/defender blue and orange. */
+.ctl {
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ctl--controlled { background: rgba(160, 170, 190, 0.18); color: #c3ccdd; }
+.ctl--contested { background: rgba(255, 190, 90, 0.14); color: #e8b46a; }
+.supply { font-variant-numeric: tabular-nums; }
+.supply--over { color: #ffce7a; font-weight: 700; }
+
+.army {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+}
+.army__grab {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 7px;
+  border: 1px solid #4a4f58;
+  border-radius: 8px;
+  background: #1c1e22;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.army__grab:disabled { cursor: default; opacity: 0.8; }
+.army--sel .army__grab { border-color: #ffd54a; box-shadow: 0 0 0 1px #ffd54a; }
+.army__n {
+  flex-shrink: 0;
+  min-width: 17px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-align: center;
+  color: #e6e6e6;
+}
+.army__coins { display: flex; flex-wrap: wrap; gap: 4px; }
+.army__coin { position: relative; display: inline-flex; }
+.army__coin img { width: 24px; height: 24px; display: block; }
+.army__x {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: #14151a;
+  border: 1px solid #3a3d44;
+  color: #c7ccd3;
+  font-size: 0.55rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.army__split {
+  flex-shrink: 0;
+  padding: 3px 6px;
+  border: 1px solid #3a3d44;
+  border-radius: 6px;
+  background: transparent;
+  color: #8b9098;
+  cursor: pointer;
+  font-size: 0.65rem;
+}
+.army__split:hover { color: #c7ccd3; border-color: #4a4f58; }
+
+.loose { margin-top: 6px; }
+.loose__head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.68rem;
+  color: #8b9098;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.loose__cost { text-transform: none; letter-spacing: 0; font-style: italic; }
+/* Dashed, matching the map: no frame means not holding ground. */
+.ustack--loose { border-style: dashed; }
+/* Recon is its own category — no supply, no army, no ground held. */
+.ustack--recon { border-style: dotted; border-color: #5a6270; }
+
+.spanel__armies { margin: 6px 0 0; font-size: 0.72rem; }
 
 .ustack {
   position: relative;

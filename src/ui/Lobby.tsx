@@ -5,7 +5,7 @@ import './Lobby.css';
 
 /** Small status line: which seat you hold, whether the opponent has arrived. */
 function OnlineStatus() {
-  const code = useSession((s) => s.room.code);
+  const code = useSession((s) => s.code);
   const seat = useSession((s) => s.seat);
   const seats = useSession((s) => s.seats);
   const status = useSession((s) => s.status);
