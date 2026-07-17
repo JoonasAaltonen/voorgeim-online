@@ -39,8 +39,8 @@
   border-radius: 6px;
   margin-bottom: 10px;
 }
-.sturn--p1 { background: rgba(120, 170, 255, 0.16); }
-.sturn--p2 { background: rgba(255, 120, 90, 0.16); }
+.sturn--p1 { background: rgba(var(--p1), 0.18); }
+.sturn--p2 { background: rgba(var(--p2), 0.18); }
 
 .shint { color: #8b9098; font-size: 0.8rem; margin: 0 0 4px; line-height: 1.5; }
 .smuted { color: #8b9098; font-size: 0.78rem; margin: 0 0 8px; line-height: 1.45; }
@@ -80,8 +80,8 @@
   margin-bottom: 6px;
 }
 .side__who { font-size: 0.72rem; font-weight: 700; padding: 1px 5px; border-radius: 3px; }
-.side__who--p1 { background: rgba(120, 170, 255, 0.2); color: #9bc0ff; }
-.side__who--p2 { background: rgba(255, 120, 90, 0.2); color: #ff9b7a; }
+.side__who--p1 { background: rgba(var(--p1), 0.22); color: #d98cb6; }
+.side__who--p2 { background: rgba(var(--p2), 0.22); color: #b6d98c; }
 .side__slots { font-size: 0.75rem; color: #8b9098; }
 .side__empty { margin: 0; font-size: 0.78rem; color: #6d727a; font-style: italic; }
 .side__units { display: flex; flex-wrap: wrap; gap: 6px; }

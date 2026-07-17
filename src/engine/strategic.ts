@@ -8,7 +8,7 @@
 // validated against the path graph only.
 
 import type { Player, StateTransition } from './types';
-import { otherPlayer } from './types';
+import { otherPlayer, playerLabel } from './types';
 import type { UnitType } from './units';
 import { STARTING_ARMY } from './units';
 import type { NodeId } from './map';
@@ -72,7 +72,7 @@ export function createStrategic(): StrategicState {
     seq: 0,
   };
   log(s, 'info', 'Both sides muster in their staging areas.');
-  log(s, 'turn', `Round 1 — p1 has ${ACTIONS_PER_TURN} actions.`);
+  log(s, 'turn', `Round 1 — ${playerLabel('p1')} has ${ACTIONS_PER_TURN} actions.`);
   return s;
 }
 
@@ -98,7 +98,7 @@ export function moveUnit(state: StrategicState, unitId: string, nodeId: NodeId):
   const u = state.units[unitId];
   if (!u) return { state, error: 'Unknown unit.' };
   if (!NODE_BY_ID[nodeId]) return { state, error: 'Unknown location.' };
-  if (u.owner !== state.turn) return { state, error: `It is ${state.turn}'s turn.` };
+  if (u.owner !== state.turn) return { state, error: `It is ${playerLabel(state.turn)}'s turn.` };
   if (state.actionsLeft <= 0) return { state, error: 'No actions left this turn.' };
   if (nodeId === u.nodeId) return { state, error: 'Already there.' };
   if (!arePathLinked(u.nodeId, nodeId)) {
@@ -109,7 +109,7 @@ export function moveUnit(state: StrategicState, unitId: string, nodeId: NodeId):
   const from = s.units[unitId].nodeId;
   s.units[unitId].nodeId = nodeId;
   s.actionsLeft--;
-  log(s, 'move', `${u.owner} ${u.type} moves ${from} → ${nodeId}.`);
+  log(s, 'move', `${playerLabel(u.owner)} ${u.type} moves ${from} → ${nodeId}.`);
   if (s.actionsLeft === 0) passTurn(s);
   return { state: s };
 }
@@ -118,7 +118,7 @@ function passTurn(s: StrategicState): void {
   s.turn = otherPlayer(s.turn);
   s.actionsLeft = ACTIONS_PER_TURN;
   if (s.turn === 'p1') s.round++;
-  log(s, 'turn', `Round ${s.round} — ${s.turn} has ${s.actionsLeft} actions.`);
+  log(s, 'turn', `Round ${s.round} — ${playerLabel(s.turn)} has ${s.actionsLeft} actions.`);
 }
 
 /** End the current player's turn without spending the remaining actions. */

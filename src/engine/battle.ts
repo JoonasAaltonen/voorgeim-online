@@ -16,7 +16,7 @@ import { applyDamage, resolveCombat, type CombatResult, type DamageOutcome } fro
 import { rollDice, type Rng, defaultRng } from './dice';
 import { FORT_HP, UNIT_STATS } from './units';
 import type { BattleUnit, Player, StateTransition } from './types';
-import { isSupportUnit, otherPlayer, PLAYER_SIDE } from './types';
+import { isSupportUnit, otherPlayer, playerLabel, PLAYER_SIDE } from './types';
 import { buildUnits, firstDeployer, type Scenario } from './scenario';
 
 export type Phase = 'deployment' | 'battle' | 'over';
@@ -92,7 +92,7 @@ function log(s: BattleState, kind: LogKind, text: string, extra?: Partial<LogEnt
 }
 
 function label(u: BattleUnit): string {
-  return `${u.owner} ${u.type}${u.wounded ? ' (wounded)' : ''}`;
+  return `${playerLabel(u.owner)} ${u.type}${u.wounded ? ' (wounded)' : ''}`;
 }
 
 function logFort(s: BattleState, hit: FortHit | undefined, sheltered: string): void {
@@ -184,7 +184,7 @@ export function createBattle(sc: Scenario): BattleState {
     log: [],
     seq: 0,
   };
-  log(s, 'info', `Deployment begins — ${fd} deploys first, front row.`);
+  log(s, 'info', `Deployment begins — ${playerLabel(fd)} deploys first, front row.`);
   return s;
 }
 
@@ -197,7 +197,7 @@ export function deployUnit(state: BattleState, unitId: string, cellId: string): 
   const cell = CELL_BY_ID[cellId];
   const mover = currentDeployer(s);
   if (!u || !cell) return { state, error: 'Unknown unit or cell.' };
-  if (u.owner !== mover) return { state, error: `It is ${mover}'s deployment turn.` };
+  if (u.owner !== mover) return { state, error: `It is ${playerLabel(mover!)}'s deployment turn.` };
   if (u.status !== 'reserve') return { state, error: 'Unit already placed.' };
   if (cell.side !== PLAYER_SIDE[u.owner]) return { state, error: 'Wrong side of the board.' };
   if (occupant(s, cellId)) return { state, error: 'Cell occupied.' };
@@ -230,7 +230,7 @@ export function deployFort(state: BattleState, cellId: string): Transition {
 
   s.forts[cellId] = { cellId, owner: mover, hp: FORT_HP };
   s.fortsLeft[mover] -= 1;
-  log(s, 'deploy', `${mover} fortifies a position.`);
+  log(s, 'deploy', `${playerLabel(mover)} fortifies a position.`);
   return { state: s };
 }
 
@@ -257,7 +257,7 @@ function beginBattle(s: BattleState): Transition {
   s.deploy = null;
   s.phase = 'battle';
   s.turn = s.attacker;
-  log(s, 'info', `Battle begins — ${s.attacker} (attacker) acts first.`);
+  log(s, 'info', `Battle begins — ${playerLabel(s.attacker)} (attacker) acts first.`);
   const v = detectVictory(s);
   if (v) return { state: s };
   return { state: s };
@@ -324,7 +324,7 @@ function detectVictory(s: BattleState): boolean {
 function finish(s: BattleState, winner: Player | 'stalemate'): boolean {
   s.winner = winner;
   s.phase = 'over';
-  log(s, 'result', winner === 'stalemate' ? 'Battle ends in a stalemate.' : `${winner} wins the battle.`);
+  log(s, 'result', winner === 'stalemate' ? 'Battle ends in a stalemate.' : `${playerLabel(winner)} wins the battle.`);
   return true;
 }
 
@@ -339,7 +339,7 @@ export function attack(
   const a = s.units[attackerId];
   const d = s.units[defenderId];
   if (!a || !d) return { state, error: 'Unknown unit.' };
-  if (a.owner !== s.turn) return { state, error: `It is ${s.turn}'s turn.` };
+  if (a.owner !== s.turn) return { state, error: `It is ${playerLabel(s.turn)}'s turn.` };
   if (a.owner === d.owner) return { state, error: 'Cannot attack a friendly unit.' };
   if (a.status !== 'deployed' || d.status !== 'deployed') return { state, error: 'Unit not on the board.' };
   if (isSupportUnit(a)) return { state, error: 'Use indirect fire for the support unit.' };
@@ -386,11 +386,11 @@ export function attack(
 
   logFort(s, atDefender.fort, dLabel);
   logFort(s, atAttacker.fort, aLabel);
-  if (defOut.becameWounded) log(s, 'result', `${d.owner} ${d.type} is wounded.`);
+  if (defOut.becameWounded) log(s, 'result', `${playerLabel(d.owner)} ${d.type} is wounded.`);
   if (defOut.destroyed) {
     d.status = 'dead';
     d.cellId = undefined;
-    log(s, 'result', `${d.owner} ${d.type} is destroyed.`);
+    log(s, 'result', `${playerLabel(d.owner)} ${d.type} is destroyed.`);
   }
   if (attOut.destroyed) {
     a.status = 'dead';
@@ -413,7 +413,7 @@ export function move(state: BattleState, unitId: string, cellId: string): Transi
   const u = s.units[unitId];
   const cell = CELL_BY_ID[cellId];
   if (!u || !cell) return { state, error: 'Unknown unit or cell.' };
-  if (u.owner !== s.turn) return { state, error: `It is ${s.turn}'s turn.` };
+  if (u.owner !== s.turn) return { state, error: `It is ${playerLabel(s.turn)}'s turn.` };
   if (u.status !== 'deployed' || !u.cellId) return { state, error: 'Unit not on the board.' };
   if (isSupportUnit(u)) return { state, error: 'The support unit does not move.' };
   if (cell.kind !== 'grid') return { state, error: 'Cannot move there.' };
@@ -431,7 +431,7 @@ export function withdraw(state: BattleState, unitId: string): Transition {
   const s = clone(state);
   const u = s.units[unitId];
   if (!u) return { state, error: 'Unknown unit.' };
-  if (u.owner !== s.turn) return { state, error: `It is ${s.turn}'s turn.` };
+  if (u.owner !== s.turn) return { state, error: `It is ${playerLabel(s.turn)}'s turn.` };
   if (u.status !== 'deployed' || !u.cellId) return { state, error: 'Unit not on the board.' };
   const cell = CELL_BY_ID[u.cellId];
   if (isSupportUnit(u)) {
@@ -459,7 +459,7 @@ export function indirectFire(
   const sup = s.units[supportId];
   const t = s.units[targetId];
   if (!sup || !t) return { state, error: 'Unknown unit.' };
-  if (sup.owner !== s.turn) return { state, error: `It is ${s.turn}'s turn.` };
+  if (sup.owner !== s.turn) return { state, error: `It is ${playerLabel(s.turn)}'s turn.` };
   if (!isSupportUnit(sup) || sup.status !== 'deployed') return { state, error: 'Support unit is not in play.' };
   if (t.owner === sup.owner || t.status !== 'deployed' || isSupportUnit(t)) {
     return { state, error: 'Invalid indirect target.' };
@@ -505,11 +505,11 @@ export function indirectFire(
     },
   );
   logFort(s, atTarget.fort, tLabel);
-  if (defOut.becameWounded) log(s, 'result', `${t.owner} ${t.type} is wounded.`);
+  if (defOut.becameWounded) log(s, 'result', `${playerLabel(t.owner)} ${t.type} is wounded.`);
   if (defOut.destroyed) {
     t.status = 'dead';
     t.cellId = undefined;
-    log(s, 'result', `${t.owner} ${t.type} is destroyed.`);
+    log(s, 'result', `${playerLabel(t.owner)} ${t.type} is destroyed.`);
   }
   if (supOut.destroyed) {
     sup.status = 'dead';

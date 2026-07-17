@@ -75,7 +75,7 @@
   font-weight: 700;
   pointer-events: none;
 }
-.smap__stage--p1 circle { stroke: #9bc0ff; }
-.smap__stage--p2 circle { stroke: #ff9b7a; }
+.smap__stage--p1 circle { stroke: #C46C9C; }
+.smap__stage--p2 circle { stroke: #9CC46C; }
 .smap__stage text:first-of-type { font-size: 22px; }
 .smap__stagecount { font-size: 26px; }

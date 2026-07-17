@@ -1,75 +1,67 @@
-# React + TypeScript + Vite
+# Voorgeim Online
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A playable demo of the Voorgeim board game, for playtesting the mechanics before
+committing to a physical print. Two players over the network, or hotseat on one
+screen.
 
-Currently, two official plugins are available:
+Rules and the implementation plan live in `../Documentation/` (`VOORGEIM.md`,
+`PLAN.md`) — this repo is code only.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Running it
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+npm install
+npm run dev          # http://localhost:5173 — client only, hotseat
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Online play needs the Worker, which Vite does not run. Two ways to get it:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+npm run dev:worker   # http://localhost:8787 — client + Durable Object, as deployed
 ```
+
+or keep HMR and run both — `npm run dev` proxies `/api/*` to `wrangler dev`:
+
+```bash
+npx wrangler dev     # terminal 1
+npm run dev          # terminal 2 — online works, HMR still works
+```
+
+To play online solo, open the game in **two tabs**: seats are remembered per tab.
+Hit "Start online game" in one, then join with the code from the other.
+
+## Checks
+
+```bash
+npm test             # Vitest — the rules engine, hermetic
+npm run lint
+npx tsc -b           # typechecks the client and the worker
+npm run smoke        # end-to-end sockets; needs `npm run dev:worker` running
+```
+
+## Deploying
+
+```bash
+npm run deploy       # builds the client, then `wrangler deploy`
+```
+
+One Worker serves both the client and the `GameRoom` Durable Object, so there is
+a single deploy and the room socket is same-origin. See §2 of `PLAN.md` for why
+this is one Worker rather than Pages + a Worker.
+
+## Layout
+
+- `src/engine/` — the rules engine: **pure, dependency-free, no DOM**. Imported by
+  both the client and the Worker, so the rules the UI shows are the ones the
+  server enforces. `room.ts` adds the seat authority that networking needs.
+- `src/net/` — `protocol.ts` (shared wire types) and `connection.ts` (browser only).
+- `src/state/` — `sessionStore` owns the room; the view stores own local selection.
+- `worker/` — the Worker and the Durable Object. May import only `src/engine/` and
+  `src/net/protocol.ts`; `tsconfig.worker.json` enforces that.
+- `tools/` — `extract_map.py` regenerates `src/data/map.json` from the Figma SVG
+  (never hand-edit it); `make_map_check.py` renders a numbered verification page.
+
+## Assets
+
+`npm run sync-assets` copies coins, boards and cards from `../Figma exports/` into
+`public/assets/`.

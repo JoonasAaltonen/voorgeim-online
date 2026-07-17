@@ -1,4 +1,4 @@
-import { coinAsset, isSupportUnit } from '../engine/types';
+import { coinAsset, isSupportUnit, playerLabel } from '../engine/types';
 import {
   currentDeployer,
   reserveUnits,
@@ -8,6 +8,7 @@ import {
 } from '../engine/battle';
 import type { CombatResult } from '../engine/combat';
 import { useBattleStore, FORT_SELECTION } from '../state/battleStore';
+import { useSession } from '../state/sessionStore';
 import './BattlePanel.css';
 
 function attackerLine(r: CombatResult): string {
@@ -96,7 +97,7 @@ function DeploymentControls({ battle }: { battle: BattleState }) {
   return (
     <div className="panel__section">
       <div className="turn turn--deploy">
-        Deploying: <b>{deployer.toUpperCase()}</b> · front-to-back, row {battle.deploy!.row + 1} of 3
+        Deploying: <b>{playerLabel(deployer)}</b> · front-to-back, row {battle.deploy!.row + 1} of 3
       </div>
       <div className="reserves">
         {reserves.length === 0 && fortsLeft === 0 && <span className="muted">No units left in reserve.</span>}
@@ -140,17 +141,17 @@ function BattleControls({ battle }: { battle: BattleState }) {
   return (
     <div className="panel__section">
       <div className={`turn turn--${battle.turn}`}>
-        Turn: <b>{battle.turn.toUpperCase()}</b> — take one action
+        Turn: <b>{playerLabel(battle.turn)}</b> — take one action
       </div>
       {stalemateLooms(battle) && (
         <div className="warn">
-          ⚑ <b>Stalemate next turn</b> — {battle.attacker.toUpperCase()} has pulled back to their
+          ⚑ <b>Stalemate next turn</b> — {playerLabel(battle.attacker)} has pulled back to their
           rear row. Move a unit over the initial frontline this turn to contest it.
         </div>
       )}
       {sel ? (
         <div className="selinfo">
-          Selected: <b>{sel.owner} {isSupportUnit(sel) ? 'support artillery' : sel.type}</b> · {sel.hp} HP{sel.wounded ? ' (wounded)' : ''}
+          Selected: <b>{playerLabel(sel.owner)} {isSupportUnit(sel) ? 'support artillery' : sel.type}</b> · {sel.hp} HP{sel.wounded ? ' (wounded)' : ''}
           <button type="button" className="btn btn--sm" onClick={withdraw}>Withdraw</button>
           {isSupportUnit(sel) && (
             <p className="hint">Bombard a highlighted enemy — indirect fire draws no counter, but only hits enemies your units can reach.</p>
@@ -164,9 +165,9 @@ function BattleControls({ battle }: { battle: BattleState }) {
 }
 
 export function BattlePanel() {
-  const battle = useBattleStore((s) => s.battle);
-  const error = useBattleStore((s) => s.error);
-  const clearError = useBattleStore((s) => s.clearError);
+  const battle = useSession((s) => s.room.battle);
+  const error = useSession((s) => s.error);
+  const clearError = useSession((s) => s.clearError);
   const newScenario = useBattleStore((s) => s.newScenario);
   if (!battle) return null;
 
@@ -176,7 +177,7 @@ export function BattlePanel() {
     <aside className="panel">
       {battle.phase === 'over' && (
         <div className="banner banner--win">
-          {battle.winner === 'stalemate' ? 'Stalemate' : `${String(battle.winner).toUpperCase()} wins`}
+          {battle.winner === 'stalemate' ? 'Stalemate' : `${playerLabel(battle.winner!)} wins`}
         </div>
       )}
 

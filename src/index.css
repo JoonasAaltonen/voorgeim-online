@@ -2,6 +2,20 @@
   color-scheme: light dark;
   font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
   line-height: 1.5;
+
+  /*
+   * Player colors, taken straight from the coin art — `playerLabel` in
+   * engine/types.ts names them, these are the same two colors. Kept as raw
+   * channels so one value serves both a solid and a translucent wash.
+   *
+   * Player identity is its own axis and must not borrow from the other two the
+   * UI already uses: blue/orange mean attacker/defender (`tag--att`/`--def`,
+   * `clog__tag--atk`/`--def`), and the board's action highlights are green =
+   * deploy, blue = move, red = attack. Blue used to mean both "defender" and
+   * "p1", which is exactly the collision these variables retire.
+   */
+  --p1: 196, 108, 156; /* #C46C9C — Red */
+  --p2: 156, 196, 108; /* #9CC46C — Green */
 }
 
 * {

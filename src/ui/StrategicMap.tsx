@@ -2,6 +2,7 @@ import { MAP, NODE_BY_ID, isStaging, spotsFor, type MapNode, type NodeId } from 
 import { legalMoveTargets, unitsAt, unitsAtFor, type StrategicState } from '../engine/strategic';
 import { coinAsset, type Player } from '../engine/types';
 import { useStrategicStore } from '../state/strategicStore';
+import { useSession } from '../state/sessionStore';
 import './StrategicMap.css';
 
 /** Half the gap between neighbouring division spots, so coins sit in their slot. */
@@ -61,7 +62,7 @@ function StagingStack({ s, node }: { s: StrategicState; node: MapNode }) {
 }
 
 export function StrategicMap() {
-  const s = useStrategicStore((st) => st.strategic);
+  const s = useSession((st) => st.room.strategic);
   const selectedId = useStrategicStore((st) => st.selectedId);
   const inspected = useStrategicStore((st) => st.inspectedNode);
   const nodeClicked = useStrategicStore((st) => st.nodeClicked);

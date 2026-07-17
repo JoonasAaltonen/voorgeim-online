@@ -28,6 +28,14 @@ export function emptyScenario(): Scenario {
   return { attacker: 'p1', sides: { p1: side(), p2: side() } };
 }
 
+/** A small asymmetric scenario, so the builder opens on something playable. */
+export function defaultScenario(): Scenario {
+  const sc = emptyScenario();
+  sc.sides.p1.roster = { infantry: 3, armor: 1 };
+  sc.sides.p2.roster = { infantry: 3, artillery: 1 };
+  return sc;
+}
+
 /** Expand a scenario into concrete BattleUnits (all in reserve, no cell yet). */
 export function buildUnits(sc: Scenario): BattleUnit[] {
   const units: BattleUnit[] = [];

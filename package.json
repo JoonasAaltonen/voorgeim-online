@@ -7,8 +7,15 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "test": "vitest run",
     "preview": "vite preview",
-    "sync-assets": "node scripts/sync-assets.mjs"
+    "sync-assets": "node scripts/sync-assets.mjs",
+    "cf-types": "wrangler types",
+    "//dev:worker": "The full stack locally: builds the client, then serves it and the Durable Object from one origin, as in production. Plain `dev` is client-only and stays hotseat.",
+    "dev:worker": "npm run build && wrangler dev",
+    "//smoke": "End-to-end socket test against a running `dev:worker`. Not in `test` — it needs a server.",
+    "smoke": "node tools/smoke-worker.mjs",
+    "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
     "react": "^19.2.7",
@@ -28,6 +35,7 @@
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.62.0",
     "vite": "^8.1.1",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "wrangler": "^4.111.0"
   }
 }

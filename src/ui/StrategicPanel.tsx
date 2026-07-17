@@ -1,14 +1,15 @@
 import { NODE_BY_ID, isSea, slotsFor, type NodeId } from '../engine/map';
 import { ACTIONS_PER_TURN, legalMoveTargets, unitsAtFor } from '../engine/strategic';
-import { coinAsset, type Player } from '../engine/types';
+import { coinAsset, playerLabel, type Player } from '../engine/types';
 import type { UnitType } from '../engine/units';
 import { useStrategicStore } from '../state/strategicStore';
+import { useSession } from '../state/sessionStore';
 import './StrategicPanel.css';
 
 const PLAYERS: Player[] = ['p1', 'p2'];
 
 function NodeSide({ nodeId, owner }: { nodeId: NodeId; owner: Player }) {
-  const s = useStrategicStore((st) => st.strategic);
+  const s = useSession((st) => st.room.strategic);
   const selectedId = useStrategicStore((st) => st.selectedId);
   const selectUnit = useStrategicStore((st) => st.selectUnit);
   const units = unitsAtFor(s, nodeId, owner);
@@ -22,7 +23,7 @@ function NodeSide({ nodeId, owner }: { nodeId: NodeId; owner: Player }) {
   return (
     <div className="side">
       <div className="side__head">
-        <span className={`side__who side__who--${owner}`}>{owner.toUpperCase()}</span>
+        <span className={`side__who side__who--${owner}`}>{playerLabel(owner)}</span>
         <span className="side__slots">
           {units.length}
           {staging ? ' units' : ` / ${slots} slot${slots === 1 ? '' : 's'}`}
@@ -54,11 +55,11 @@ function NodeSide({ nodeId, owner }: { nodeId: NodeId; owner: Player }) {
 }
 
 export function StrategicPanel() {
-  const s = useStrategicStore((st) => st.strategic);
+  const s = useSession((st) => st.room.strategic);
   const selectedId = useStrategicStore((st) => st.selectedId);
   const inspected = useStrategicStore((st) => st.inspectedNode);
-  const error = useStrategicStore((st) => st.error);
-  const clearError = useStrategicStore((st) => st.clearError);
+  const error = useSession((st) => st.error);
+  const clearError = useSession((st) => st.clearError);
   const endTurn = useStrategicStore((st) => st.endTurn);
   const reset = useStrategicStore((st) => st.reset);
 
@@ -70,12 +71,12 @@ export function StrategicPanel() {
     <aside className="spanel">
       <div className="spanel__section">
         <div className={`sturn sturn--${s.turn}`}>
-          Round {s.round} · <b>{s.turn.toUpperCase()}</b> — {s.actionsLeft} of {ACTIONS_PER_TURN}{' '}
+          Round {s.round} · <b>{playerLabel(s.turn)}</b> · {s.actionsLeft} of {ACTIONS_PER_TURN}{' '}
           action{s.actionsLeft === 1 ? '' : 's'} left
         </div>
         {sel ? (
           <p className="shint">
-            Carrying <b>{sel.owner} {sel.type}</b> from {sel.nodeId}. Click a highlighted
+            Carrying <b>{playerLabel(sel.owner)} {sel.type}</b> from {sel.nodeId}. Click a highlighted
             location to move it, or click the coin again to put it down.
             {legalMoveTargets(s, selectedId!).length === 0 && ' No moves left this turn.'}
           </p>
@@ -86,7 +87,7 @@ export function StrategicPanel() {
           </p>
         )}
         <button type="button" className="sbtn" onClick={endTurn}>
-          End {s.turn.toUpperCase()}'s turn
+          End {playerLabel(s.turn)}'s turn
         </button>
       </div>
 
@@ -99,7 +100,7 @@ export function StrategicPanel() {
       {node && (
         <div className="spanel__section">
           <div className="spanel__title">
-            {node.staging ? `${node.staging.toUpperCase()} staging area` : node.id}
+            {node.staging ? `${playerLabel(node.staging)} staging area` : node.id}
             {node.asymmetric && <span className="tagpill">asymmetric</span>}
             {isSea(node.id) && <span className="tagpill tagpill--sea">sea</span>}
           </div>

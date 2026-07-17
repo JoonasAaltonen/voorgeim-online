@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# Wrangler's local state (miniflare's simulated DO storage, build cache).
+# `worker-configuration.d.ts` is generated but committed, so a typecheck does not
+# require running wrangler first.
+.wrangler
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

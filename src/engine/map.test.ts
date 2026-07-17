@@ -167,7 +167,7 @@ describe('strategic movement', () => {
     const s = createStrategic();
     const enemy = first(s, 'p2');
     const t = moveUnit(s, enemy.id, NODE_BY_ID[enemy.nodeId].adjacency[0]);
-    expect(t.error).toMatch(/p1's turn/);
+    expect(t.error).toMatch(/P1 - Red's turn/);
     expect(t.state).toBe(s);
   });
 
@@ -181,7 +181,7 @@ describe('strategic movement', () => {
 
     const c = Object.values(t.state.units).find((u) => u.owner === 'p1' && u.id !== a.id)!;
     const denied = moveUnit(t.state, c.id, NODE_BY_ID[c.nodeId].adjacency[0]);
-    expect(denied.error).toMatch(/p2's turn/);
+    expect(denied.error).toMatch(/P2 - Green's turn/);
   });
 
   it('counts a round only when play returns to p1', () => {

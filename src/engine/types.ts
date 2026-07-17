@@ -16,6 +16,16 @@ export interface StateTransition<S> {
 
 export const otherPlayer = (p: Player): Player => (p === 'p1' ? 'p2' : 'p1');
 
+/** Each player's coin color. */
+export const PLAYER_COLOR: Record<Player, string> = { p1: 'Red', p2: 'Green' };
+
+/**
+ * How a player is named wherever one is shown: "P1 - Red". The color is the part
+ * you can actually see on the board, and online you learn your side by joining —
+ * so the two travel together rather than leaving "P1" to be matched up by eye.
+ */
+export const playerLabel = (p: Player): string => `${p.toUpperCase()} - ${PLAYER_COLOR[p]}`;
+
 /** Board side each player deploys on. p1 = bottom, p2 = top (matches the art). */
 export const PLAYER_SIDE = { p1: 'bottom', p2: 'top' } as const;
 

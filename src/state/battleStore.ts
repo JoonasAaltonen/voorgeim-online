@@ -1,39 +1,32 @@
+// Battle *interaction* state: what this player has picked up, and the intents
+// their clicks turn into. The battle itself lives in the session's room — read
+// it from there, because online it is the server's answer, not this store's.
+
 import { create } from 'zustand';
 import type { Scenario } from '../engine/scenario';
-import { emptyScenario } from '../engine/scenario';
 import type { UnitType } from '../engine/units';
+import type { BattleState } from '../engine/battle';
 import type { BattleUnit, Player } from '../engine/types';
-import {
-  createBattle,
-  deployUnit,
-  deployFort,
-  passDeploy,
-  attack,
-  move,
-  withdraw,
-  indirectFire as engineIndirectFire,
-  type BattleState,
-  type Transition,
-} from '../engine/battle';
+import { battleMover } from '../engine/room';
+import { useSession } from './sessionStore';
 
 type Combat = Exclude<UnitType, 'recon'>;
 
 /** Sentinel `selectedId` meaning "a fortification is queued for placement". */
 export const FORT_SELECTION = '__fortification__';
 
-function defaultScenario(): Scenario {
-  const sc = emptyScenario();
-  sc.sides.p1.roster = { infantry: 3, armor: 1 };
-  sc.sides.p2.roster = { infantry: 3, artillery: 1 };
-  return sc;
+const session = () => useSession.getState();
+
+/** Edit the scenario as a whole — it travels to the other player as one value. */
+function editScenario(edit: (sc: Scenario) => void): void {
+  const next = structuredClone(session().room.scenario);
+  edit(next);
+  session().dispatch({ t: 'setScenario', scenario: next });
 }
 
 interface Store {
-  scenario: Scenario;
-  battle: BattleState | null;
   /** Reserve unit chosen to deploy, or a board unit selected to act. */
   selectedId: string | null;
-  error: string | null;
 
   // scenario editing
   setRoster: (p: Player, type: Combat, count: number) => void;
@@ -53,95 +46,98 @@ interface Store {
   indirectFire: (targetId: string) => void;
   moveTo: (cellId: string) => void;
   withdrawSelected: () => void;
-  clearError: () => void;
 }
 
-export const useBattleStore = create<Store>((set, get) => {
-  /** Apply an engine transition: on success store new state + clear selection. */
-  const apply = (t: Transition, keepSelection = false) => {
-    if (t.error) {
-      set({ error: t.error });
-    } else {
-      set({ battle: t.state, error: null, selectedId: keepSelection ? get().selectedId : null });
+export const useBattleStore = create<Store>((set, get) => ({
+  selectedId: null,
+
+  setRoster: (p, type, count) =>
+    editScenario((sc) => {
+      sc.sides[p].roster[type] = Math.max(0, count) || undefined;
+    }),
+  setForts: (p, count) =>
+    editScenario((sc) => {
+      sc.sides[p].fortifications = Math.max(0, count) || 0;
+    }),
+  toggleSupport: (p) =>
+    editScenario((sc) => {
+      sc.sides[p].support = !sc.sides[p].support;
+    }),
+  toggleRecon: (p) =>
+    editScenario((sc) => {
+      sc.sides[p].reconRevealed = !sc.sides[p].reconRevealed;
+    }),
+  setAttacker: (p) =>
+    editScenario((sc) => {
+      sc.attacker = p;
+    }),
+
+  startBattle: () => {
+    set({ selectedId: null });
+    session().dispatch({ t: 'startBattle' });
+  },
+  newScenario: () => {
+    set({ selectedId: null });
+    session().dispatch({ t: 'newScenario' });
+  },
+
+  select: (id) => {
+    set({ selectedId: id });
+    session().clearError();
+  },
+  selectFort: () => {
+    set({ selectedId: FORT_SELECTION });
+    session().clearError();
+  },
+
+  deployTo: (cellId) => {
+    const { selectedId } = get();
+    if (!selectedId) return;
+    if (selectedId === FORT_SELECTION) {
+      session().dispatch({ t: 'deployFort', cellId });
+      return;
     }
-  };
+    session().dispatch({ t: 'deploy', unitId: selectedId, cellId });
+  },
+  passDeploy: () => session().dispatch({ t: 'passDeploy' }),
+  attackTarget: (targetId) => {
+    const { selectedId } = get();
+    if (selectedId) session().dispatch({ t: 'attack', unitId: selectedId, targetId });
+  },
+  indirectFire: (targetId) => {
+    const { selectedId } = get();
+    if (selectedId) session().dispatch({ t: 'indirectFire', unitId: selectedId, targetId });
+  },
+  moveTo: (cellId) => {
+    const { selectedId } = get();
+    if (selectedId) session().dispatch({ t: 'move', unitId: selectedId, cellId });
+  },
+  withdrawSelected: () => {
+    const { selectedId } = get();
+    if (selectedId) session().dispatch({ t: 'withdraw', unitId: selectedId });
+  },
+}));
 
-  return {
-    scenario: defaultScenario(),
-    battle: null,
-    selectedId: null,
-    error: null,
+/**
+ * Selection is local, but the authoritative state moves underneath it — the unit
+ * you had picked up gets killed, the cell you aimed at is taken. Every accepted
+ * action therefore drops the selection, exactly as the hotseat store did when it
+ * applied a transition. Doing it on the *room changing* rather than at dispatch
+ * is what makes online behave identically, since there the answer only arrives a
+ * round-trip later.
+ */
+useSession.subscribe((s, prev) => {
+  if (s.room.version === prev.room.version) return;
+  const { selectedId } = useBattleStore.getState();
+  if (!selectedId) return;
 
-    setRoster: (p, type, count) =>
-      set((s) => {
-        const scenario = structuredClone(s.scenario);
-        scenario.sides[p].roster[type] = Math.max(0, count) || undefined;
-        return { scenario };
-      }),
-    setForts: (p, count) =>
-      set((s) => {
-        const scenario = structuredClone(s.scenario);
-        scenario.sides[p].fortifications = Math.max(0, count) || 0;
-        return { scenario };
-      }),
-    toggleSupport: (p) =>
-      set((s) => {
-        const scenario = structuredClone(s.scenario);
-        scenario.sides[p].support = !scenario.sides[p].support;
-        return { scenario };
-      }),
-    toggleRecon: (p) =>
-      set((s) => {
-        const scenario = structuredClone(s.scenario);
-        scenario.sides[p].reconRevealed = !scenario.sides[p].reconRevealed;
-        return { scenario };
-      }),
-    setAttacker: (p) =>
-      set((s) => ({ scenario: { ...structuredClone(s.scenario), attacker: p } })),
-
-    startBattle: () => set({ battle: createBattle(get().scenario), selectedId: null, error: null }),
-    newScenario: () => set({ battle: null, selectedId: null, error: null }),
-
-    select: (id) => set({ selectedId: id, error: null }),
-    selectFort: () => set({ selectedId: FORT_SELECTION, error: null }),
-    deployTo: (cellId) => {
-      const { battle, selectedId } = get();
-      if (!battle || !selectedId) return;
-      if (selectedId === FORT_SELECTION) {
-        // Keep the fortification selected so several can be placed in a row.
-        const t = deployFort(battle, cellId);
-        apply(t, !t.error && t.state.fortsLeft[t.state.turn] > 0);
-        return;
-      }
-      apply(deployUnit(battle, selectedId, cellId));
-    },
-    passDeploy: () => {
-      const { battle } = get();
-      if (!battle) return;
-      apply(passDeploy(battle));
-    },
-    attackTarget: (defenderId) => {
-      const { battle, selectedId } = get();
-      if (!battle || !selectedId) return;
-      apply(attack(battle, selectedId, defenderId));
-    },
-    indirectFire: (targetId) => {
-      const { battle, selectedId } = get();
-      if (!battle || !selectedId) return;
-      apply(engineIndirectFire(battle, selectedId, targetId));
-    },
-    moveTo: (cellId) => {
-      const { battle, selectedId } = get();
-      if (!battle || !selectedId) return;
-      apply(move(battle, selectedId, cellId));
-    },
-    withdrawSelected: () => {
-      const { battle, selectedId } = get();
-      if (!battle || !selectedId) return;
-      apply(withdraw(battle, selectedId));
-    },
-    clearError: () => set({ error: null }),
-  };
+  // A queued fortification stays queued, so several can be placed in a row.
+  if (selectedId === FORT_SELECTION) {
+    const b = s.room.battle;
+    const mover = b ? battleMover(b) : null;
+    if (b && mover && b.fortsLeft[mover] > 0) return;
+  }
+  useBattleStore.setState({ selectedId: null });
 });
 
 /** Unit currently occupying a cell (deployed only). */

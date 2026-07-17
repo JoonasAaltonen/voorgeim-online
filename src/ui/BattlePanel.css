@@ -19,9 +19,11 @@
   border-radius: 6px;
   margin-bottom: 10px;
 }
-.turn--deploy { background: rgba(120, 200, 120, 0.15); }
-.turn--p1 { background: rgba(120, 170, 255, 0.16); }
-.turn--p2 { background: rgba(255, 120, 90, 0.16); }
+/* Amber, not green: this is the same banner slot as `turn--p1/p2` below, and
+   green now means the player, not the phase. */
+.turn--deploy { background: rgba(255, 213, 74, 0.14); }
+.turn--p1 { background: rgba(var(--p1), 0.18); }
+.turn--p2 { background: rgba(var(--p2), 0.18); }
 
 .reserves {
   display: flex;

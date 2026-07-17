@@ -1,0 +1,98 @@
+.lobby {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  font-size: 0.82rem;
+}
+
+.lobby__label {
+  color: #9aa0a6;
+}
+
+.lobby__btn {
+  padding: 5px 12px;
+  border: 1px solid #33363d;
+  border-radius: 6px;
+  background: #1c1e22;
+  color: #e6e6e6;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.lobby__btn:hover {
+  border-color: #4a7bd6;
+}
+
+.lobby__btn--go {
+  background: #4a7bd6;
+  border-color: #4a7bd6;
+  color: #fff;
+}
+.lobby__btn--go:hover {
+  background: #3d6ac2;
+}
+
+.lobby__join {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.lobby__input {
+  width: 8ch;
+  padding: 5px 8px;
+  border: 1px solid #33363d;
+  border-radius: 6px;
+  background: #101215;
+  color: #e6e6e6;
+  font-family: inherit;
+  font-size: 0.82rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.lobby__input:focus {
+  outline: 2px solid #4a7bd6;
+  outline-offset: 1px;
+}
+
+/* The code is the whole lobby protocol, so it gets to look like a token. */
+.lobby__code {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 10px;
+  border: 1px dashed #4a7bd6;
+  border-radius: 6px;
+  background: #101215;
+  color: #cdd8ef;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.95rem;
+  letter-spacing: 0.18em;
+  cursor: pointer;
+}
+.lobby__code:hover {
+  background: #161a20;
+}
+
+.lobby__copy {
+  color: #6b727c;
+  font-size: 0.68rem;
+  letter-spacing: 0;
+}
+
+.lobby__status {
+  color: #9aa0a6;
+}
+
+.lobby__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.lobby__dot--live {
+  background: #4caf7d;
+}
+.lobby__dot--down {
+  background: #d6a24a;
+}

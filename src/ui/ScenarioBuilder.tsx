@@ -1,14 +1,15 @@
-import type { Player } from '../engine/types';
+import { playerLabel, type Player } from '../engine/types';
 import type { UnitType } from '../engine/units';
 import { useBattleStore } from '../state/battleStore';
+import { useSession } from '../state/sessionStore';
 import './ScenarioBuilder.css';
 
 const COMBAT_TYPES: Exclude<UnitType, 'recon'>[] = ['infantry', 'artillery', 'anti-tank', 'armor'];
 const PLAYERS: Player[] = ['p1', 'p2'];
 
 function SideEditor({ player }: { player: Player }) {
-  const side = useBattleStore((s) => s.scenario.sides[player]);
-  const attacker = useBattleStore((s) => s.scenario.attacker);
+  const side = useSession((s) => s.room.scenario.sides[player]);
+  const attacker = useSession((s) => s.room.scenario.attacker);
   const setRoster = useBattleStore((s) => s.setRoster);
   const setForts = useBattleStore((s) => s.setForts);
   const toggleSupport = useBattleStore((s) => s.toggleSupport);
@@ -17,7 +18,7 @@ function SideEditor({ player }: { player: Player }) {
   return (
     <div className="side-editor">
       <h3>
-        {player.toUpperCase()} {attacker === player ? <span className="tag tag--att">attacker</span> : <span className="tag tag--def">defender</span>}
+        {playerLabel(player)} {attacker === player ? <span className="tag tag--att">attacker</span> : <span className="tag tag--def">defender</span>}
         <span className="side-editor__where">{player === 'p1' ? 'bottom' : 'top'}</span>
       </h3>
       <div className="roster">
@@ -55,7 +56,7 @@ function SideEditor({ player }: { player: Player }) {
 }
 
 export function ScenarioBuilder() {
-  const attacker = useBattleStore((s) => s.scenario.attacker);
+  const attacker = useSession((s) => s.room.scenario.attacker);
   const setAttacker = useBattleStore((s) => s.setAttacker);
   const startBattle = useBattleStore((s) => s.startBattle);
 
@@ -70,7 +71,7 @@ export function ScenarioBuilder() {
             className={attacker === p ? 'is-active' : ''}
             onClick={() => setAttacker(p)}
           >
-            {p.toUpperCase()}
+            {playerLabel(p)}
           </button>
         ))}
       </div>

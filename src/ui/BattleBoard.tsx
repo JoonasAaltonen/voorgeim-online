@@ -2,6 +2,7 @@ import { BOARD, CELL_RADIUS, SUPPORT_RADIUS, boardCells } from '../engine/board'
 import { coinAsset, isSupportUnit, PLAYER_SIDE } from '../engine/types';
 import { currentDeployer, attackTargetIds, moveTargetCells, indirectTargetIds } from '../engine/battle';
 import { useBattleStore, occupantOf, FORT_SELECTION } from '../state/battleStore';
+import { useSession } from '../state/sessionStore';
 import './BattleBoard.css';
 
 const CELLS = boardCells();
@@ -10,7 +11,7 @@ const pct = (v: number, total: number) => `${(v / total) * 100}%`;
 type Highlight = 'deploy' | 'attack' | 'move';
 
 export function BattleBoard() {
-  const battle = useBattleStore((s) => s.battle);
+  const battle = useSession((s) => s.room.battle);
   const selectedId = useBattleStore((s) => s.selectedId);
   const select = useBattleStore((s) => s.select);
   const deployTo = useBattleStore((s) => s.deployTo);

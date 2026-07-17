@@ -1,21 +1,19 @@
+// Strategic-map *interaction* state: the unit in hand and the node on show. The
+// map itself lives in the session's room — read it from there, because online it
+// is the server's answer, not this store's.
+
 import { create } from 'zustand';
 import type { NodeId } from '../engine/map';
 import { STAGING_NODE } from '../engine/map';
-import {
-  createStrategic,
-  endTurn,
-  moveUnit,
-  type StrategicState,
-  type Transition,
-} from '../engine/strategic';
+import { useSession } from './sessionStore';
+
+const session = () => useSession.getState();
 
 interface Store {
-  strategic: StrategicState;
   /** Unit picked up and awaiting a destination. */
   selectedId: string | null;
   /** Node whose contents are open in the panel. */
   inspectedNode: NodeId | null;
-  error: string | null;
 
   selectUnit: (id: string | null) => void;
   inspectNode: (id: NodeId | null) => void;
@@ -23,44 +21,42 @@ interface Store {
   nodeClicked: (id: NodeId) => void;
   endTurn: () => void;
   reset: () => void;
-  clearError: () => void;
 }
 
-export const useStrategicStore = create<Store>((set, get) => {
-  const apply = (t: Transition) => {
-    if (t.error) set({ error: t.error });
-    else set({ strategic: t.state, error: null, selectedId: null });
-  };
+export const useStrategicStore = create<Store>((set, get) => ({
+  selectedId: null,
+  inspectedNode: STAGING_NODE.p1,
 
-  return {
-    strategic: createStrategic(),
-    selectedId: null,
-    inspectedNode: STAGING_NODE.p1,
-    error: null,
+  selectUnit: (id) => {
+    set({ selectedId: id });
+    session().clearError();
+  },
+  inspectNode: (id) => {
+    set({ inspectedNode: id });
+    session().clearError();
+  },
 
-    selectUnit: (id) => set({ selectedId: id, error: null }),
-    inspectNode: (id) => set({ inspectedNode: id, error: null }),
+  nodeClicked: (id) => {
+    const { selectedId } = get();
+    if (selectedId) {
+      session().dispatch({ t: 'stratMove', unitId: selectedId, nodeId: id });
+      // Follow the unit, so the panel keeps showing where it landed. Harmless if
+      // the move is refused: the panel just opens the node they aimed at.
+      set({ inspectedNode: id });
+      return;
+    }
+    set({ inspectedNode: id });
+    session().clearError();
+  },
 
-    nodeClicked: (id) => {
-      const { strategic, selectedId } = get();
-      if (selectedId) {
-        const t = moveUnit(strategic, selectedId, id);
-        apply(t);
-        // Follow the unit so the panel keeps showing where it landed.
-        if (!t.error) set({ inspectedNode: id });
-        return;
-      }
-      set({ inspectedNode: id, error: null });
-    },
+  endTurn: () => session().dispatch({ t: 'stratEndTurn' }),
+  reset: () => {
+    set({ selectedId: null, inspectedNode: STAGING_NODE.p1 });
+    session().dispatch({ t: 'stratReset' });
+  },
+}));
 
-    endTurn: () => apply(endTurn(get().strategic)),
-    reset: () =>
-      set({
-        strategic: createStrategic(),
-        selectedId: null,
-        inspectedNode: STAGING_NODE.p1,
-        error: null,
-      }),
-    clearError: () => set({ error: null }),
-  };
+/** Every accepted action drops the unit in hand — see the note in battleStore. */
+useSession.subscribe((s, prev) => {
+  if (s.room.version !== prev.room.version) useStrategicStore.setState({ selectedId: null });
 });

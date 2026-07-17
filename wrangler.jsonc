@@ -1,0 +1,27 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "voorgeim-online",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-01-15",
+
+  // The built client ships inside this same Worker, so the game and its socket
+  // share an origin. `run_worker_first` is what keeps the SPA fallback from
+  // swallowing /api/* — without it, the socket path would resolve to index.html
+  // before the Worker ever saw the request.
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+
+  "durable_objects": {
+    "bindings": [{ "name": "GAME_ROOM", "class_name": "GameRoom" }]
+  },
+
+  // SQLite-backed Durable Objects: required for new classes, and the tier
+  // available on the free plan.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["GameRoom"] }],
+
+  "observability": { "enabled": true }
+}
