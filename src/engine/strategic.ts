@@ -191,9 +191,9 @@ function log(s: StrategicState, kind: StratLogKind, text: string): void {
  * win it the next and you move twice in a row — which is a real weapon, and the
  * reason the roll exists.
  */
-function rollInitiative(rng: Rng): Player {
+function rollInitiative(rng: Rng): { winner: Player; win: number; lose: number } {
   const { a, b } = rollUntilDifferent(rng);
-  return a > b ? 'p1' : 'p2';
+  return a > b ? { winner: 'p1', win: a, lose: b } : { winner: 'p2', win: b, lose: a };
 }
 
 /** Every player starts with their full roster loose in their staging area. */
@@ -207,7 +207,8 @@ export function createStrategic(rng: Rng = defaultRng): StrategicState {
       }
     }
   }
-  const first = rollInitiative(rng);
+  const opening = rollInitiative(rng);
+  const first = opening.winner;
   const s: StrategicState = {
     turn: first,
     actionsLeft: ACTIONS_PER_TURN,
@@ -225,7 +226,11 @@ export function createStrategic(rng: Rng = defaultRng): StrategicState {
     tick: 0,
   };
   log(s, 'info', 'Both sides muster in their staging areas — every unit starts disorganized.');
-  log(s, 'turn', `Round 1 — ${playerLabel(first)} wins initiative and has ${ACTIONS_PER_TURN} actions.`);
+  log(
+    s,
+    'turn',
+    `Round 1 — ${playerLabel(first)} wins initiative ${opening.win}–${opening.lose} and has ${ACTIONS_PER_TURN} actions.`,
+  );
   return s;
 }
 
@@ -928,21 +933,25 @@ function passTurn(s: StrategicState, rng: Rng): void {
   enforceSupply(s, s.turn);
   checkVictory(s, s.turn);
   if (s.winner) return;
+  s.actionsLeft = ACTIONS_PER_TURN;
   // A round is over once the player who moved second is done — i.e. when the one
-  // just finishing is not the round's first mover. Then initiative is re-rolled.
+  // just finishing is not the round's first mover. Then initiative is re-rolled,
+  // and the fresh dice go to the log so the hand-off never looks arbitrary.
   if (s.turn === s.firstPlayer) {
     // First mover done; hand off to the other for the back half of the round.
     s.turn = otherPlayer(s.turn);
-  } else {
-    s.round++;
-    s.firstPlayer = rollInitiative(rng);
-    s.turn = s.firstPlayer;
+    log(s, 'turn', `Round ${s.round} — ${playerLabel(s.turn)} has ${s.actionsLeft} actions.`);
+    return;
   }
-  s.actionsLeft = ACTIONS_PER_TURN;
-  const how = s.turn === s.firstPlayer && s.actionsLeft === ACTIONS_PER_TURN && s.round > 1
-    ? 'wins initiative and '
-    : '';
-  log(s, 'turn', `Round ${s.round} — ${playerLabel(s.turn)} ${how}has ${s.actionsLeft} actions.`);
+  s.round++;
+  const roll = rollInitiative(rng);
+  s.firstPlayer = roll.winner;
+  s.turn = roll.winner;
+  log(
+    s,
+    'turn',
+    `Round ${s.round} — ${playerLabel(s.turn)} wins initiative ${roll.win}–${roll.lose} and has ${s.actionsLeft} actions.`,
+  );
 }
 
 /** End the current player's turn without spending the remaining actions. */
