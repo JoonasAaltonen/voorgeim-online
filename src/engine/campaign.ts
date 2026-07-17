@@ -43,8 +43,11 @@ function fightersAt(s: StrategicState, nodeId: NodeId, player: Player): MapUnit[
  */
 export function canInitiateBattle(s: StrategicState, nodeId: NodeId, player: Player): boolean {
   if (isSea(nodeId) || isStaging(nodeId)) return false;
+  // "[Wounded units] can't participate in an attack against the enemy" — so the
+  // attacker needs at least one able-bodied unit to lead the assault, not merely
+  // a body in the node.
   return (
-    fightersAt(s, nodeId, player).length > 0 &&
+    fightersAt(s, nodeId, player).some((u) => !u.wounded) &&
     fightersAt(s, nodeId, otherPlayer(player)).length > 0
   );
 }
@@ -112,14 +115,23 @@ export function createBattleAt(
     return { error: 'No enemy to attack in that location.' };
   }
   const defender = otherPlayer(attacker);
-  const units: BattleUnit[] = [];
+  // The attacking force leaves its wounded behind — they cannot join an assault.
+  // The defender's wounded are dragged in all the same, entering face-up and
+  // fighting at −1, because a defensive engagement is forced on them.
+  const attackerUnits = fightersAt(s, nodeId, attacker).filter((u) => !u.wounded);
+  const defenderUnits = fightersAt(s, nodeId, defender);
+  const units: BattleUnit[] = [
+    ...attackerUnits.map((u) => toBattleUnit(u)),
+    ...defenderUnits.map((u) => toBattleUnit(u)),
+  ];
   for (const p of PLAYERS) {
-    for (const u of fightersAt(s, nodeId, p)) units.push(toBattleUnit(u));
     for (const g of supportGuns(s, nodeId, p)) units.push(toBattleUnit(g, true));
   }
 
-  const aRev = anyRevealed(fightersAt(s, nodeId, attacker));
-  const dRev = anyRevealed(fightersAt(s, nodeId, defender));
+  // Deploy order follows recon, judged only on the units actually taking the
+  // field — a wounded attacker left at home does not count as a revealed side.
+  const aRev = anyRevealed(attackerUnits);
+  const dRev = anyRevealed(defenderUnits);
   const firstDeployer = aRev !== dRev ? (aRev ? attacker : defender) : attacker;
 
   const battle = assembleBattle({

@@ -20,6 +20,8 @@
 // Not part of `npm test`: it needs a server running, and Vitest should stay
 // hermetic.
 
+import { readFileSync } from 'node:fs';
+
 // Default target is a local `dev:worker`; any origin may be passed instead.
 const TARGET = process.argv[2] ?? 'http://127.0.0.1:8787';
 const BASE = (() => {
@@ -31,7 +33,14 @@ const BASE = (() => {
 // outlives the process, so a fixed code would replay into last run's game.
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const CODE = Array.from({ length: 6 }, () => ALPHABET[(Math.random() * 32) | 0]).join('');
-const V = 1;
+// Read the protocol version straight from the source of truth, so a bump there
+// can never leave the smoke test knocking with a stale `v` and getting refused.
+const V = (() => {
+  const src = readFileSync(new URL('../src/net/protocol.ts', import.meta.url), 'utf8');
+  const m = src.match(/PROTOCOL_VERSION\s*=\s*(\d+)/);
+  if (!m) throw new Error('could not read PROTOCOL_VERSION from protocol.ts');
+  return Number(m[1]);
+})();
 
 console.log(`smoke: ${BASE}`);
 

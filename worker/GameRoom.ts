@@ -16,6 +16,18 @@ import {
 import type { Player } from '../src/engine/types';
 
 const SEATS: readonly Player[] = ['p1', 'p2'];
+
+/**
+ * What is actually written to storage: the room, stamped with the protocol it
+ * was saved under. A deploy that changes the state shape bumps `PROTOCOL_VERSION`,
+ * and anything stored under an older stamp is discarded on load rather than
+ * rehydrated into an engine that no longer understands it. (Pre-stamp saves read
+ * back with `protocol === undefined`, which likewise fails the match.)
+ */
+interface Persisted {
+  protocol: number;
+  room: RoomState;
+}
 const STORAGE_KEY = 'room';
 
 /** Per-socket data. Survives hibernation on the socket's attachment. */
@@ -31,7 +43,11 @@ export class GameRoom extends DurableObject<Env> {
     // Hibernation evicts this object's memory while its sockets stay open, so
     // the room is rehydrated from storage rather than assumed to be in memory.
     ctx.blockConcurrencyWhile(async () => {
-      this.room = (await ctx.storage.get<RoomState>(STORAGE_KEY)) ?? null;
+      const stored = await ctx.storage.get<Persisted>(STORAGE_KEY);
+      // A room saved under an older protocol is a different shape; drop it and
+      // let the next connection start a fresh game rather than serve a state the
+      // engine will crash on.
+      this.room = stored?.protocol === PROTOCOL_VERSION ? stored.room : null;
     });
   }
 
@@ -162,7 +178,7 @@ export class GameRoom extends DurableObject<Env> {
 
   private async save(room: RoomState): Promise<void> {
     this.room = room;
-    await this.ctx.storage.put(STORAGE_KEY, room);
+    await this.ctx.storage.put(STORAGE_KEY, { protocol: PROTOCOL_VERSION, room } satisfies Persisted);
   }
 
   private send(ws: WebSocket, msg: ServerMsg): void {

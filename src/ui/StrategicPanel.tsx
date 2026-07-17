@@ -36,6 +36,29 @@ function byType(units: { id: string; type: UnitType }[]): [UnitType, string[]][]
   return [...m];
 }
 
+/**
+ * Army coins, grouped by type but with the wounded split out from the whole —
+ * they are not interchangeable, and a wounded unit must stay face-up (it heals
+ * only back in staging), so it earns its own chip and badge.
+ */
+interface CoinGroup {
+  key: string;
+  type: UnitType;
+  wounded: boolean;
+  ids: string[];
+}
+function coinGroups(units: { id: string; type: UnitType; wounded?: boolean }[]): CoinGroup[] {
+  const m = new Map<string, CoinGroup>();
+  for (const u of units) {
+    const wounded = !!u.wounded;
+    const key = `${u.type}${wounded ? ':wounded' : ''}`;
+    const g = m.get(key) ?? { key, type: u.type, wounded, ids: [] };
+    g.ids.push(u.id);
+    m.set(key, g);
+  }
+  return [...m.values()];
+}
+
 /** An army: its coins, its strength, and the free split-off control. */
 function ArmyRow({ s, armyId, mine }: { s: StrategicState; armyId: string; mine: boolean }) {
   const sel = useStrategicStore((st) => st.sel);
@@ -55,10 +78,15 @@ function ArmyRow({ s, armyId, mine }: { s: StrategicState; armyId: string; mine:
       >
         <span className="army__n">{units.length}</span>
         <span className="army__coins">
-          {byType(units).map(([type, ids]) => (
-            <span key={type} className="army__coin">
-              <img src={coinAsset(type, s.units[ids[0]].owner)} alt={type} title={type} />
-              {ids.length > 1 && <span className="army__x">{ids.length}</span>}
+          {coinGroups(units).map((g) => (
+            <span key={g.key} className={`army__coin${g.wounded ? ' army__coin--wounded' : ''}`}>
+              <img
+                src={coinAsset(g.type, s.units[g.ids[0]].owner)}
+                alt={g.type}
+                title={g.wounded ? `${g.type} — wounded (heals only in staging)` : g.type}
+              />
+              {g.wounded && <span className="army__wound" aria-hidden>✚</span>}
+              {g.ids.length > 1 && <span className="army__x">{g.ids.length}</span>}
             </span>
           ))}
         </span>
@@ -224,6 +252,18 @@ export function StrategicPanel() {
   const live = !s.winner && !s.pendingRetreat;
   const canAttack = !!node && yours && live && canInitiateBattle(s, node.id, s.turn);
   const canFort = !!node && yours && live && canFortify(s, node.id, s.turn);
+  // Both sides share the node and it is yours to act, yet you cannot attack: the
+  // only reason left (the node is fightable and the enemy is here) is that every
+  // one of your units here is wounded, and wounded units cannot lead an assault.
+  const woundedCantAttack =
+    !!node &&
+    yours &&
+    live &&
+    !canAttack &&
+    !isSea(node.id) &&
+    !isStaging(node.id) &&
+    occupies(s, node.id, s.turn) &&
+    occupies(s, node.id, otherPlayer(s.turn));
   const owedFreeReorg = !!node && yours && live && canFreeReorg(s, node.id, s.turn);
   const pr = s.pendingRetreat;
   const myRetreat = !!pr && pr.player === eye;
@@ -369,6 +409,11 @@ export function StrategicPanel() {
             <button type="button" className="sbtn sbtn--attack" onClick={() => initiateBattle(node.id)}>
               Attack the enemy here — opens the battle board
             </button>
+          )}
+          {woundedCantAttack && (
+            <p className="smuted spanel__adj">
+              Your units here are wounded — they cannot mount an attack, only defend.
+            </p>
           )}
           {canFort && (
             <button type="button" className="sbtn" onClick={() => fortify(node.id)}>

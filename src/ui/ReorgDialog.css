@@ -105,12 +105,28 @@
 .rcol__empty { color: #4a4f58; font-size: 0.8rem; }
 
 .rchip {
+  position: relative;
   padding: 2px;
   border: 1px solid #3a3d44;
   border-radius: 7px;
   background: #1c1e22;
   cursor: grab;
   line-height: 0;
+}
+.rchip__wound {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #c0392b;
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 700;
+  line-height: 13px;
+  text-align: center;
+  pointer-events: none;
 }
 .rchip img {
   width: 28px;

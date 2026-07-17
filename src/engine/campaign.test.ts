@@ -111,14 +111,38 @@ describe('opening a battle', () => {
     expect(battle!.units[scout.id]).toBeUndefined();
   });
 
-  it('sends a wounded infantry in at one hitpoint, still wounded', () => {
+  it('sends a wounded defender in at one hitpoint, still wounded', () => {
     const s = createStrategic();
-    const [inf] = army(s, 'p1', BATTLE, 'infantry', 1);
+    army(s, 'p1', BATTLE, 'infantry', 1); // attacker, able-bodied
+    const [inf] = army(s, 'p2', BATTLE, 'infantry', 1);
     inf.wounded = true;
-    army(s, 'p2', BATTLE, 'infantry', 1);
     const { battle } = createBattleAt(s, BATTLE, 'p1');
     expect(battle!.units[inf.id].wounded).toBe(true);
     expect(battle!.units[inf.id].hp).toBe(1);
+  });
+
+  it("leaves the attacker's wounded behind but drags the defender's in", () => {
+    const s = createStrategic();
+    const [whole] = army(s, 'p1', BATTLE, 'infantry', 1);
+    const [aWounded] = army(s, 'p1', BATTLE, 'infantry', 1);
+    aWounded.wounded = true;
+    const [dWounded] = army(s, 'p2', BATTLE, 'infantry', 1);
+    dWounded.wounded = true;
+
+    const { battle } = createBattleAt(s, BATTLE, 'p1');
+    expect(battle!.units[whole.id]).toBeDefined();
+    expect(battle!.units[aWounded.id]).toBeUndefined(); // cannot join an attack
+    expect(battle!.units[dWounded.id]).toBeDefined(); // forced into the defence
+    expect(battle!.units[dWounded.id].wounded).toBe(true);
+  });
+
+  it('will not let a force of only wounded units mount an attack', () => {
+    const s = createStrategic();
+    const [w] = army(s, 'p1', BATTLE, 'infantry', 1);
+    w.wounded = true;
+    army(s, 'p2', BATTLE, 'infantry', 1);
+    expect(canInitiateBattle(s, BATTLE, 'p1')).toBe(false);
+    expect(createBattleAt(s, BATTLE, 'p1').error).toBeTruthy();
   });
 
   it('lets the revealed side deploy first (recon advantage)', () => {

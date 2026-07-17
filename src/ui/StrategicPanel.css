@@ -185,8 +185,23 @@
   color: #e6e6e6;
 }
 .army__coins { display: flex; flex-wrap: wrap; gap: 4px; }
-.army__coin { position: relative; display: inline-flex; }
+.army__coin { position: relative; display: inline-flex; border-radius: 50%; }
 .army__coin img { width: 24px; height: 24px; display: block; }
+.army__coin--wounded { box-shadow: 0 0 0 2px #c46c6c; }
+.army__wound {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #c0392b;
+  color: #fff;
+  font-size: 0.55rem;
+  font-weight: 700;
+  line-height: 12px;
+  text-align: center;
+}
 .army__x {
   position: absolute;
   right: -3px;

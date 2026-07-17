@@ -186,9 +186,10 @@ export function ReorgDialog({ nodeId, free = false }: { nodeId: NodeId; free?: b
                         e.stopPropagation();
                         setHeld(held === u.id ? null : u.id);
                       }}
-                      title={u.type}
+                      title={u.wounded ? `${u.type} — wounded` : u.type}
                     >
                       <img src={coinAsset(u.type, player)} alt={u.type} />
+                      {u.wounded && <span className="rchip__wound" aria-hidden>✚</span>}
                     </div>
                   ))}
                   {members.length === 0 && <span className="rcol__empty">—</span>}
