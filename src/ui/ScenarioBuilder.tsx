@@ -10,6 +10,7 @@ function SideEditor({ player }: { player: Player }) {
   const side = useBattleStore((s) => s.scenario.sides[player]);
   const attacker = useBattleStore((s) => s.scenario.attacker);
   const setRoster = useBattleStore((s) => s.setRoster);
+  const setForts = useBattleStore((s) => s.setForts);
   const toggleSupport = useBattleStore((s) => s.toggleSupport);
   const toggleRecon = useBattleStore((s) => s.toggleRecon);
 
@@ -31,6 +32,15 @@ function SideEditor({ player }: { player: Player }) {
             />
           </label>
         ))}
+        <label className="roster__row">
+          <span>🛡 fortifications</span>
+          <input
+            type="number"
+            min={0}
+            value={side.fortifications}
+            onChange={(e) => setForts(player, Number(e.target.value))}
+          />
+        </label>
       </div>
       <label className="check">
         <input type="checkbox" checked={side.support} onChange={() => toggleSupport(player)} />
@@ -73,7 +83,8 @@ export function ScenarioBuilder() {
         Start battle
       </button>
       <p className="scenario__hint">
-        Recon advantage decides who deploys first; support artillery becomes usable in a later phase.
+        Recon advantage decides who deploys first. Fortifications are placed during deployment,
+        one per position, and cover the front and flanks of the cell they sit on.
       </p>
     </div>
   );

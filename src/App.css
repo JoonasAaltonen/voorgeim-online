@@ -4,6 +4,11 @@
   padding: 24px 16px 48px;
 }
 
+/* The strategic map is a 4:3 board and needs the room. */
+.app--wide {
+  max-width: 1500px;
+}
+
 .app__battle {
   display: flex;
   gap: 24px;
@@ -36,3 +41,25 @@
   color: #9aa0a6;
   font-size: 0.85rem;
 }
+
+.app__views {
+  display: inline-flex;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 3px;
+  border: 1px solid #33363d;
+  border-radius: 999px;
+  background: #1c1e22;
+}
+
+.app__view {
+  padding: 5px 14px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: #9aa0a6;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.app__view:hover { color: #e6e6e6; }
+.app__view--on { background: #4a7bd6; color: #fff; }

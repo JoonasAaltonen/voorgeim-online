@@ -6,6 +6,7 @@ import type { BattleUnit, Player } from '../engine/types';
 import {
   createBattle,
   deployUnit,
+  deployFort,
   passDeploy,
   attack,
   move,
@@ -16,6 +17,9 @@ import {
 } from '../engine/battle';
 
 type Combat = Exclude<UnitType, 'recon'>;
+
+/** Sentinel `selectedId` meaning "a fortification is queued for placement". */
+export const FORT_SELECTION = '__fortification__';
 
 function defaultScenario(): Scenario {
   const sc = emptyScenario();
@@ -33,6 +37,7 @@ interface Store {
 
   // scenario editing
   setRoster: (p: Player, type: Combat, count: number) => void;
+  setForts: (p: Player, count: number) => void;
   toggleSupport: (p: Player) => void;
   toggleRecon: (p: Player) => void;
   setAttacker: (p: Player) => void;
@@ -41,6 +46,7 @@ interface Store {
 
   // interaction
   select: (id: string | null) => void;
+  selectFort: () => void;
   deployTo: (cellId: string) => void;
   passDeploy: () => void;
   attackTarget: (defenderId: string) => void;
@@ -72,6 +78,12 @@ export const useBattleStore = create<Store>((set, get) => {
         scenario.sides[p].roster[type] = Math.max(0, count) || undefined;
         return { scenario };
       }),
+    setForts: (p, count) =>
+      set((s) => {
+        const scenario = structuredClone(s.scenario);
+        scenario.sides[p].fortifications = Math.max(0, count) || 0;
+        return { scenario };
+      }),
     toggleSupport: (p) =>
       set((s) => {
         const scenario = structuredClone(s.scenario);
@@ -91,9 +103,16 @@ export const useBattleStore = create<Store>((set, get) => {
     newScenario: () => set({ battle: null, selectedId: null, error: null }),
 
     select: (id) => set({ selectedId: id, error: null }),
+    selectFort: () => set({ selectedId: FORT_SELECTION, error: null }),
     deployTo: (cellId) => {
       const { battle, selectedId } = get();
       if (!battle || !selectedId) return;
+      if (selectedId === FORT_SELECTION) {
+        // Keep the fortification selected so several can be placed in a row.
+        const t = deployFort(battle, cellId);
+        apply(t, !t.error && t.state.fortsLeft[t.state.turn] > 0);
+        return;
+      }
       apply(deployUnit(battle, selectedId, cellId));
     },
     passDeploy: () => {

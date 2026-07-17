@@ -1,8 +1,19 @@
 import { describe, it, expect } from 'vitest';
 import { resolveCombat, applyDamage } from './combat';
-import { areAdjacent, neighborIds, artilleryArcCells } from './board';
+import { areAdjacent, neighborIds, artilleryArcCells, fortCovers } from './board';
 import { emptyScenario } from './scenario';
-import { createBattle, deployUnit, passDeploy, attack, indirectFire, type Transition } from './battle';
+import {
+  createBattle,
+  deployUnit,
+  deployFort,
+  passDeploy,
+  attack,
+  move,
+  withdraw,
+  indirectFire,
+  stalemateLooms,
+  type Transition,
+} from './battle';
 import type { BattleUnit } from './types';
 
 const unit = (over: Partial<BattleUnit>): BattleUnit => ({
@@ -184,6 +195,168 @@ describe('battle flow', () => {
     expect(res.error).toBeUndefined();
     expect(res.state.units['p2-artillery-1'].hp).toBe(2); // took no damage
     expect(res.state.units['p1-support'].status).toBe('dead'); // countered for 2, had 2 HP
+  });
+
+  it('a fortification covers the front and flanks but not the rear', () => {
+    // bottom fort at gr4: attacks from gr<=4 are covered, from gr5 (behind) are not.
+    expect(fortCovers('bottom-r1-c1', 3)).toBe(true); // front
+    expect(fortCovers('bottom-r1-c1', 4)).toBe(true); // flank
+    expect(fortCovers('bottom-r1-c1', 5)).toBe(false); // rear / rear corner
+    // top forts face the other way.
+    expect(fortCovers('top-r1-c1', 2)).toBe(true); // front
+    expect(fortCovers('top-r1-c1', 0)).toBe(false); // rear
+  });
+
+  /** p2 attacks; p1 holds a fortified position on the front row. */
+  function fortifiedDefence(p1Type: 'armor' | 'infantry', p2Type: 'infantry' | 'artillery') {
+    const sc = emptyScenario();
+    sc.attacker = 'p2';
+    sc.sides.p1.roster = { [p1Type]: 1 };
+    sc.sides.p1.fortifications = 1;
+    sc.sides.p2.roster = { [p2Type]: 1 };
+    let t: Transition = { state: createBattle(sc) };
+    t = deployUnit(t.state, `p2-${p2Type}-1`, 'top-r0-c0');
+    t = passDeploy(t.state);
+    t = deployUnit(t.state, `p1-${p1Type}-1`, 'bottom-r0-c0');
+    t = deployFort(t.state, 'bottom-r0-c0');
+    t = passDeploy(t.state);
+    for (let i = 0; i < 4; i++) t = passDeploy(t.state);
+    expect(t.state.phase).toBe('battle');
+    expect(t.state.turn).toBe('p2');
+    return t.state;
+  }
+
+  it('a frontal hit is soaked by the fortification, not the occupant', () => {
+    const start = fortifiedDefence('armor', 'infantry');
+    // infantry breakthrough=1 → [4]; armor toughness=1 → [2] (fail, no counter)
+    const t = attack(start, 'p2-infantry-1', 'p1-armor-1', seqRng([0.5, 0.2]));
+    expect(t.error).toBeUndefined();
+    expect(t.state.units['p1-armor-1'].hp).toBe(4); // untouched
+    expect(t.state.forts['bottom-r0-c0'].hp).toBe(1); // 2 − 1
+    expect(t.state.log.find((e) => e.combat)?.combat?.fortDefender).toMatchObject({
+      absorbed: 1,
+      destroyed: false,
+    });
+  });
+
+  it('an overkill hit levels the fortification but still spares the occupant', () => {
+    const start = fortifiedDefence('infantry', 'artillery');
+    // artillery breakthrough=2 → [4,1] value 4 → 3 damage; infantry toughness=3 → [2,1,1]
+    const t = attack(start, 'p2-artillery-1', 'p1-infantry-1', seqRng([0.5, 0, 0.2, 0, 0]));
+    expect(t.error).toBeUndefined();
+    expect(t.state.units['p1-infantry-1'].hp).toBe(4); // the fort takes all 3
+    expect(t.state.forts['bottom-r0-c0']).toBeUndefined(); // levelled
+    expect(t.state.log.find((e) => e.combat)?.combat?.fortDefender).toMatchObject({
+      absorbed: 3,
+      destroyed: true,
+    });
+  });
+
+  it('a fortification seized from behind does not shelter its new occupant', () => {
+    const sc = emptyScenario();
+    sc.attacker = 'p2';
+    sc.sides.p1.roster = { infantry: 1 };
+    sc.sides.p1.support = true;
+    sc.sides.p1.fortifications = 1;
+    sc.sides.p2.roster = { infantry: 1 };
+    let t: Transition = { state: createBattle(sc) };
+    t = deployUnit(t.state, 'p2-infantry-1', 'top-r0-c1');
+    t = passDeploy(t.state);
+    t = deployUnit(t.state, 'p1-infantry-1', 'bottom-r0-c2'); // spotter
+    t = deployUnit(t.state, 'p1-support', 'bottom-support');
+    t = deployFort(t.state, 'bottom-r0-c1'); // left empty on purpose
+    t = passDeploy(t.state);
+    for (let i = 0; i < 4; i++) t = passDeploy(t.state);
+
+    // p2 walks into the undefended fortification on p1's side of the line.
+    t = move(t.state, 'p2-infantry-1', 'bottom-r0-c1');
+    expect(t.error).toBeUndefined();
+
+    // p1's support shells it from behind the fort's facing → no cover, and the
+    // target is on p1's own side so there is no over-the-line penalty.
+    const res = indirectFire(t.state, 'p1-support', 'p2-infantry-1', seqRng([0.5, 0, 0.2, 0, 0]));
+    expect(res.error).toBeUndefined();
+    expect(res.state.units['p2-infantry-1'].hp).toBe(1); // 4 − 3, unsheltered
+    expect(res.state.forts['bottom-r0-c1'].hp).toBe(2); // fort itself untouched
+    expect(res.state.log.find((e) => e.combat)?.combat?.fortDefender).toBeUndefined();
+    expect(res.state.log.find((e) => e.combat)?.combat?.attackerRolls).toHaveLength(2); // full breakthrough
+  });
+
+  /** p1 attacks and pulls its only unit back to the rearmost row. */
+  function disengagedAttacker() {
+    const sc = emptyScenario();
+    sc.attacker = 'p1';
+    sc.sides.p1.roster = { infantry: 1 };
+    sc.sides.p2.roster = { infantry: 1 };
+    let t: Transition = { state: createBattle(sc) };
+    t = passDeploy(t.state); // p1 skips row 0
+    t = deployUnit(t.state, 'p2-infantry-1', 'top-r0-c3');
+    t = passDeploy(t.state); // → row 1
+    t = passDeploy(t.state);
+    t = passDeploy(t.state); // → row 2
+    t = deployUnit(t.state, 'p1-infantry-1', 'bottom-r2-c0'); // straight into the back row
+    t = passDeploy(t.state);
+    t = passDeploy(t.state); // → battle
+    expect(t.state.phase).toBe('battle');
+    return t.state;
+  }
+
+  it('warns the defender only on the turn a stalemate is one handoff away', () => {
+    let t: Transition = { state: disengagedAttacker() };
+    expect(stalemateLooms(t.state)).toBe(false); // attacker's turn, not the defender's
+    t = move(t.state, 'p1-infantry-1', 'bottom-r2-c1');
+    expect(stalemateLooms(t.state)).toBe(true); // defender's last chance
+    // Contesting clears the warning rather than ending the battle.
+    t = move(t.state, 'p2-infantry-1', 'bottom-r0-c3');
+    expect(t.state.phase).toBe('battle');
+    t = move(t.state, 'p1-infantry-1', 'bottom-r2-c0');
+    expect(stalemateLooms(t.state)).toBe(false);
+  });
+
+  it('an uncontested disengagement ends the battle in a stalemate', () => {
+    let t: Transition = { state: disengagedAttacker() };
+    t = move(t.state, 'p1-infantry-1', 'bottom-r2-c1'); // still the back row
+    expect(t.state.phase).toBe('battle'); // p2 gets a turn to answer
+    t = move(t.state, 'p2-infantry-1', 'top-r0-c2'); // stays on their own side
+    expect(t.state.phase).toBe('over');
+    expect(t.state.winner).toBe('stalemate');
+  });
+
+  it('the defender contests a stalemate by crossing the initial frontline', () => {
+    let t: Transition = { state: disengagedAttacker() };
+    t = move(t.state, 'p1-infantry-1', 'bottom-r2-c1');
+    t = move(t.state, 'p2-infantry-1', 'bottom-r0-c3'); // over the line
+    expect(t.error).toBeUndefined();
+    expect(t.state.phase).toBe('battle');
+    expect(t.state.winner).toBeNull();
+  });
+
+  it('an attacker still holding the support unit has not disengaged', () => {
+    const sc = emptyScenario();
+    sc.attacker = 'p1';
+    sc.sides.p1.roster = { infantry: 1 };
+    sc.sides.p1.support = true;
+    sc.sides.p2.roster = { infantry: 1 };
+    let t: Transition = { state: createBattle(sc) };
+    t = deployUnit(t.state, 'p1-support', 'bottom-support');
+    t = passDeploy(t.state);
+    t = deployUnit(t.state, 'p2-infantry-1', 'top-r0-c3');
+    t = passDeploy(t.state);
+    t = passDeploy(t.state);
+    t = passDeploy(t.state);
+    t = deployUnit(t.state, 'p1-infantry-1', 'bottom-r2-c0');
+    t = passDeploy(t.state);
+    t = passDeploy(t.state);
+
+    t = move(t.state, 'p1-infantry-1', 'bottom-r2-c1');
+    t = move(t.state, 'p2-infantry-1', 'top-r0-c2');
+    expect(t.state.phase).toBe('battle'); // support still in the fight
+
+    // Pull it out, and the next uncontested exchange settles the battle.
+    t = withdraw(t.state, 'p1-support');
+    t = move(t.state, 'p2-infantry-1', 'top-r0-c1');
+    expect(t.state.phase).toBe('over');
+    expect(t.state.winner).toBe('stalemate');
   });
 
   it('rejects a non-adjacent attack', () => {

@@ -43,6 +43,7 @@
 }
 .chip img { width: 22px; height: 22px; }
 .chip--sel { border-color: #ffd54a; color: #ffd54a; }
+.chip--fort { padding-left: 8px; border-color: #c9963f; color: #e0b568; }
 
 .selinfo {
   display: flex;
@@ -64,6 +65,18 @@
 }
 .btn--sm { margin: 0; padding: 4px 10px; font-size: 0.8rem; background: #6b4ad6; }
 .btn--ghost { background: transparent; border: 1px solid #3a3d44; color: #c7ccd3; }
+
+/* Last-chance notice: acting now is the only way to avoid a stalemate. */
+.warn {
+  margin-bottom: 10px;
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 190, 90, 0.45);
+  border-radius: 6px;
+  background: rgba(255, 190, 90, 0.12);
+  color: #ffce7a;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
 
 .hint { color: #8b9098; font-size: 0.8rem; margin: 8px 0 0; }
 .muted { color: #8b9098; font-size: 0.82rem; }
@@ -139,4 +152,5 @@
   border-color: #ffd54a;
   color: #1a1a1a;
 }
+.clog__fort { margin-top: 3px; color: #e0b568; }
 .clog__dmg { margin-top: 3px; color: #ffd08a; }

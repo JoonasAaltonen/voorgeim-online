@@ -53,6 +53,38 @@
   box-shadow: 0 0 10px 2px rgba(255, 213, 74, 0.7);
 }
 
+/*
+ * Fortification: an arc drawn around the covered directions only — front and
+ * both flanks — so the open rear is visible at a glance. The rear-facing border
+ * is dropped, leaving a ~270° ring.
+ */
+.bcell__fort {
+  position: absolute;
+  inset: -14%;
+  border: 3px solid #c9963f;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.bcell__fort--bottom { border-bottom-color: transparent; }
+.bcell__fort--top { border-top-color: transparent; }
+
+/* Remaining fortification HP, shown on the open (rear) side. */
+.bcell__fort::after {
+  content: attr(data-hp);
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0 4px;
+  border-radius: 6px;
+  background: #c9963f;
+  color: #1a1a1a;
+  font-size: 0.6rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.bcell__fort--bottom::after { bottom: -8%; }
+.bcell__fort--top::after { top: -8%; }
+
 /* Own units on your turn are clickable to select. */
 .bcell:has(.bcell__coin) {
   cursor: pointer;

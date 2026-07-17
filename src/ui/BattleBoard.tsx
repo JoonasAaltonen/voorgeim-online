@@ -1,7 +1,7 @@
 import { BOARD, CELL_RADIUS, SUPPORT_RADIUS, boardCells } from '../engine/board';
 import { coinAsset, isSupportUnit, PLAYER_SIDE } from '../engine/types';
 import { currentDeployer, attackTargetIds, moveTargetCells, indirectTargetIds } from '../engine/battle';
-import { useBattleStore, occupantOf } from '../state/battleStore';
+import { useBattleStore, occupantOf, FORT_SELECTION } from '../state/battleStore';
 import './BattleBoard.css';
 
 const CELLS = boardCells();
@@ -21,7 +21,14 @@ export function BattleBoard() {
   const highlights: Record<string, Highlight> = {};
   const sel = battle && selectedId ? battle.units[selectedId] : undefined;
 
-  if (battle && sel) {
+  if (battle && battle.phase === 'deployment' && selectedId === FORT_SELECTION) {
+    const p = currentDeployer(battle)!;
+    for (const c of CELLS) {
+      if (c.kind === 'grid' && c.side === PLAYER_SIDE[p] && c.row === battle.deploy!.row && !battle.forts[c.id]) {
+        highlights[c.id] = 'deploy';
+      }
+    }
+  } else if (battle && sel) {
     if (battle.phase === 'deployment' && sel.status === 'reserve' && sel.owner === currentDeployer(battle)) {
       if (isSupportUnit(sel)) {
         const slot = `${PLAYER_SIDE[sel.owner]}-support`;
@@ -80,6 +87,7 @@ export function BattleBoard() {
         const r = cell.kind === 'support' ? SUPPORT_RADIUS : CELL_RADIUS;
         const hl = highlights[cell.id];
         const isSel = occ && occ.id === selectedId;
+        const fort = battle?.forts[cell.id];
         return (
           <button
             key={cell.id}
@@ -92,8 +100,12 @@ export function BattleBoard() {
               width: pct(r * 2, BOARD.width),
               height: pct(r * 2, BOARD.height),
             }}
-            title={occ ? `${occ.owner} ${occ.type} · ${occ.hp} HP${occ.wounded ? ' (wounded)' : ''}` : cell.id}
+            title={
+              (occ ? `${occ.owner} ${occ.type} · ${occ.hp} HP${occ.wounded ? ' (wounded)' : ''}` : cell.id) +
+              (fort ? ` · fortified (${fort.hp} HP)` : '')
+            }
           >
+            {fort && <span className={`bcell__fort bcell__fort--${cell.side}`} data-hp={fort.hp} />}
             {occ && (
               <img
                 className="bcell__coin"

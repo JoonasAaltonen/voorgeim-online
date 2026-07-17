@@ -1,0 +1,81 @@
+.smap {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #33363d;
+  border-radius: 10px;
+  background: #1a1c20;
+  overflow: hidden;
+}
+
+.smap__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* Node ids stay faint until they are needed for orientation. */
+.smap__id {
+  font-size: 26px;
+  font-weight: 600;
+  fill: #3d3a30;
+  text-anchor: middle;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.smap__node { cursor: pointer; }
+.smap__hit { fill: transparent; }
+
+.smap__node--inspect .smap__id { fill: #1d1c18; opacity: 1; }
+.smap__node--inspect .smap__hit { fill: rgba(255, 213, 74, 0.1); stroke: #ffd54a; stroke-width: 2; }
+.smap__node--origin .smap__hit { fill: rgba(255, 213, 74, 0.14); }
+
+/* Legal destinations for the unit in hand. */
+.smap__ring {
+  fill: rgba(90, 200, 120, 0.16);
+  stroke: #3fbf6a;
+  stroke-width: 4;
+  pointer-events: none;
+}
+.smap__node--target:hover .smap__ring { fill: rgba(90, 200, 120, 0.34); }
+
+.smap__path {
+  stroke: #3fbf6a;
+  stroke-width: 6;
+  stroke-dasharray: 14 10;
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+.smap__coin { cursor: pointer; }
+.smap__coin--sel {
+  outline: 3px solid #ffd54a;
+  outline-offset: 1px;
+  border-radius: 50%;
+}
+
+/* Overflow marker when a side holds more units than it has division spots. */
+.smap__more circle { fill: #23252a; stroke: #ffd54a; stroke-width: 1.5; }
+.smap__more text {
+  fill: #ffd54a;
+  font-size: 16px;
+  font-weight: 700;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.smap__stage circle {
+  fill: rgba(172, 103, 126, 0.9);
+  stroke: #f3e6ec;
+  stroke-width: 3;
+}
+.smap__stage text {
+  text-anchor: middle;
+  fill: #fff6fa;
+  font-weight: 700;
+  pointer-events: none;
+}
+.smap__stage--p1 circle { stroke: #9bc0ff; }
+.smap__stage--p2 circle { stroke: #ff9b7a; }
+.smap__stage text:first-of-type { font-size: 22px; }
+.smap__stagecount { font-size: 26px; }

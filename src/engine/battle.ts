@@ -3,17 +3,31 @@
 // + rolls always produce the same battle — the basis for the server-authoritative
 // Durable Object later, and for deterministic tests now.
 
-import { BACK_ROW, CELL_BY_ID, areAdjacent, artilleryArcCells, neighborIds } from './board';
-import { applyDamage, resolveCombat, type CombatResult } from './combat';
+import {
+  BACK_ROW,
+  CELL_BY_ID,
+  SUPPORT_ORIGIN_GR,
+  areAdjacent,
+  artilleryArcCells,
+  fortCovers,
+  neighborIds,
+} from './board';
+import { applyDamage, resolveCombat, type CombatResult, type DamageOutcome } from './combat';
 import { rollDice, type Rng, defaultRng } from './dice';
-import { UNIT_STATS } from './units';
-import type { BattleUnit, Player } from './types';
+import { FORT_HP, UNIT_STATS } from './units';
+import type { BattleUnit, Player, StateTransition } from './types';
 import { isSupportUnit, otherPlayer, PLAYER_SIDE } from './types';
 import { buildUnits, firstDeployer, type Scenario } from './scenario';
 
 export type Phase = 'deployment' | 'battle' | 'over';
 
 export type LogKind = 'info' | 'deploy' | 'attack' | 'move' | 'withdraw' | 'result';
+
+/** What a fortification soaked up on one exchange, for the log. */
+export interface FortHit {
+  absorbed: number;
+  destroyed: boolean;
+}
 
 export interface CombatEntry {
   attacker: string;
@@ -23,6 +37,10 @@ export interface CombatEntry {
   result: CombatResult;
   /** True when the attack was indirect fire from the support slot. */
   indirect?: boolean;
+  /** Set when a fortification sheltered the defender from the attack. */
+  fortDefender?: FortHit;
+  /** Set when a fortification sheltered the attacker from the counter. */
+  fortAttacker?: FortHit;
 }
 
 export interface LogEntry {
@@ -40,22 +58,30 @@ export interface DeployState {
   firstDeployer: Player;
 }
 
+/** A fortification occupies a cell, not a unit — it shelters whoever stands in it. */
+export interface Fort {
+  cellId: string;
+  owner: Player;
+  hp: number;
+}
+
 export interface BattleState {
   phase: Phase;
   attacker: Player;
   defender: Player;
   turn: Player;
   units: Record<string, BattleUnit>;
+  /** Fortifications on the board, keyed by cell id. */
+  forts: Record<string, Fort>;
+  /** Fortifications each player still has to place during deployment. */
+  fortsLeft: Record<Player, number>;
   deploy: DeployState | null;
   winner: Player | 'stalemate' | null;
   log: LogEntry[];
   seq: number;
 }
 
-export interface Transition {
-  state: BattleState;
-  error?: string;
-}
+export type Transition = StateTransition<BattleState>;
 
 // --- helpers ---------------------------------------------------------------
 
@@ -67,6 +93,15 @@ function log(s: BattleState, kind: LogKind, text: string, extra?: Partial<LogEnt
 
 function label(u: BattleUnit): string {
   return `${u.owner} ${u.type}${u.wounded ? ' (wounded)' : ''}`;
+}
+
+function logFort(s: BattleState, hit: FortHit | undefined, sheltered: string): void {
+  if (!hit) return;
+  log(
+    s,
+    'result',
+    `Fortification absorbs ${hit.absorbed} damage for ${sheltered}${hit.destroyed ? ' and is levelled.' : '.'}`,
+  );
 }
 
 /** Combat units a player has standing on the grid (support + off-board excluded). */
@@ -89,6 +124,44 @@ function occupant(s: BattleState, cellId: string): BattleUnit | undefined {
   return Object.values(s.units).find((u) => u.status === 'deployed' && u.cellId === cellId);
 }
 
+/** Global row a unit's fire originates from (support fires from behind its side). */
+function originGr(u: BattleUnit): number {
+  if (u.cellId) {
+    const c = CELL_BY_ID[u.cellId];
+    if (c && c.kind === 'grid') return c.gr;
+  }
+  return SUPPORT_ORIGIN_GR[PLAYER_SIDE[u.owner]];
+}
+
+/**
+ * Apply one side's share of an exchange, routing the incoming attack through a
+ * fortification when the attack comes from a covered direction. Self-inflicted
+ * fumble damage is never absorbed — the fort shelters against the enemy, not
+ * against your own mistakes.
+ */
+function damageUnit(
+  s: BattleState,
+  u: BattleUnit,
+  total: number,
+  self: number,
+  fromGr: number,
+): { out: DamageOutcome; fort?: FortHit } {
+  let incoming = Math.max(0, total - self);
+  const cellId = u.cellId;
+  const fort = cellId ? s.forts[cellId] : undefined;
+  let hit: FortHit | undefined;
+
+  if (fort && cellId && incoming > 0 && fortCovers(cellId, fromGr)) {
+    // The fortification must be levelled before its occupant takes any damage,
+    // so it soaks the whole hit however large.
+    fort.hp -= incoming;
+    hit = { absorbed: incoming, destroyed: fort.hp <= 0 };
+    incoming = 0;
+    if (fort.hp <= 0) delete s.forts[cellId];
+  }
+  return { out: applyDamage(u, incoming + self), fort: hit };
+}
+
 // --- construction ----------------------------------------------------------
 
 export function createBattle(sc: Scenario): BattleState {
@@ -101,6 +174,11 @@ export function createBattle(sc: Scenario): BattleState {
     defender: otherPlayer(sc.attacker),
     turn: fd,
     units,
+    forts: {},
+    fortsLeft: {
+      p1: Math.max(0, sc.sides.p1.fortifications ?? 0),
+      p2: Math.max(0, sc.sides.p2.fortifications ?? 0),
+    },
     deploy: { row: 0, index: 0, firstDeployer: fd },
     winner: null,
     log: [],
@@ -137,6 +215,25 @@ export function deployUnit(state: BattleState, unitId: string, cellId: string): 
   return { state: s };
 }
 
+/** Place one prepared fortification on a cell of the current deployer's row. */
+export function deployFort(state: BattleState, cellId: string): Transition {
+  if (state.phase !== 'deployment') return { state, error: 'Not in deployment.' };
+  const s = clone(state);
+  const cell = CELL_BY_ID[cellId];
+  const mover = currentDeployer(s)!;
+  if (!cell) return { state, error: 'Unknown cell.' };
+  if (s.fortsLeft[mover] <= 0) return { state, error: 'No fortifications left to place.' };
+  if (cell.kind !== 'grid') return { state, error: 'Fortifications go on the deployment grid.' };
+  if (cell.side !== PLAYER_SIDE[mover]) return { state, error: 'Wrong side of the board.' };
+  if (cell.row !== s.deploy!.row) return { state, error: `Fortify row ${s.deploy!.row} (front-first).` };
+  if (s.forts[cellId]) return { state, error: 'Position is already fortified.' };
+
+  s.forts[cellId] = { cellId, owner: mover, hp: FORT_HP };
+  s.fortsLeft[mover] -= 1;
+  log(s, 'deploy', `${mover} fortifies a position.`);
+  return { state: s };
+}
+
 /** Current deployer finishes their turn for this row. */
 export function passDeploy(state: BattleState): Transition {
   if (state.phase !== 'deployment' || !state.deploy) return { state, error: 'Not in deployment.' };
@@ -168,9 +265,48 @@ function beginBattle(s: BattleState): Transition {
 
 // --- battle actions --------------------------------------------------------
 
+/**
+ * The attacker has broken off: every surviving unit sits in their rearmost row
+ * and the support has left the field. Units that cannot fit the back row must
+ * therefore have withdrawn — which is exactly the manual's "excess units" rule.
+ */
+function attackerHasDisengaged(s: BattleState): boolean {
+  const units = deployedCombatUnits(s, s.attacker);
+  if (units.length === 0) return false;
+  if (!units.every((u) => !!u.cellId && CELL_BY_ID[u.cellId].row === BACK_ROW)) return false;
+  const sup = s.units[`${s.attacker}-support`];
+  return !sup || sup.status !== 'deployed';
+}
+
+/** The defender contests a stalemate by pushing units over the initial frontline. */
+function defenderContests(s: BattleState): boolean {
+  return deployedCombatUnits(s, s.defender).some(
+    (u) => !!u.cellId && CELL_BY_ID[u.cellId].side !== PLAYER_SIDE[s.defender],
+  );
+}
+
+/**
+ * True while the defender is on their last chance: the attacker has disengaged
+ * and nothing is over the line, so ending this turn without contesting settles
+ * the battle as a stalemate. Mirrors the check in `endTurn`.
+ */
+export function stalemateLooms(s: BattleState): boolean {
+  return (
+    s.phase === 'battle' &&
+    s.turn === s.defender &&
+    attackerHasDisengaged(s) &&
+    !defenderContests(s)
+  );
+}
+
 function endTurn(s: BattleState): void {
   if (s.phase === 'over') return;
   s.turn = otherPlayer(s.turn);
+  // Checked as the attacker regains the initiative, so the defender has always
+  // had one turn to answer the disengagement before the battle is called off.
+  if (s.turn === s.attacker && attackerHasDisengaged(s) && !defenderContests(s)) {
+    finish(s, 'stalemate');
+  }
 }
 
 function detectVictory(s: BattleState): boolean {
@@ -230,8 +366,11 @@ export function attack(
   const aLabel = label(a);
   const dLabel = label(d);
   const targetCell = d.cellId;
-  const defOut = applyDamage(d, res.damageToDefender);
-  const attOut = applyDamage(a, res.damageToAttacker);
+  // Directions are captured before anyone is removed from the board.
+  const atDefender = damageUnit(s, d, res.damageToDefender, res.selfDefender, originGr(a));
+  const atAttacker = damageUnit(s, a, res.damageToAttacker, res.selfAttacker, originGr(d));
+  const defOut = atDefender.out;
+  const attOut = atAttacker.out;
 
   log(s, 'attack', `${aLabel} attacks ${dLabel}.`, {
     combat: {
@@ -240,9 +379,13 @@ export function attack(
       attackerRolls: aRoll.rolls,
       defenderRolls: dRoll.rolls,
       result: res,
+      fortDefender: atDefender.fort,
+      fortAttacker: atAttacker.fort,
     },
   });
 
+  logFort(s, atDefender.fort, dLabel);
+  logFort(s, atAttacker.fort, aLabel);
   if (defOut.becameWounded) log(s, 'result', `${d.owner} ${d.type} is wounded.`);
   if (defOut.destroyed) {
     d.status = 'dead';
@@ -340,14 +483,28 @@ export function indirectFire(
 
   const supLabel = label(sup);
   const tLabel = label(t);
-  const defOut = applyDamage(t, res.damageToDefender);
-  const supOut = applyDamage(sup, res.damageToAttacker); // crit-fail self-damage, or an artillery counter
+  const atTarget = damageUnit(s, t, res.damageToDefender, res.selfDefender, originGr(sup));
+  // crit-fail self-damage, or an artillery counter; the support slot is never fortified
+  const atSup = damageUnit(s, sup, res.damageToAttacker, res.selfAttacker, originGr(t));
+  const defOut = atTarget.out;
+  const supOut = atSup.out;
   log(
     s,
     'attack',
     `${supLabel} calls in indirect fire on ${tLabel}${overFrontline ? ' (over the line, −1 breakthrough)' : ''}.`,
-    { combat: { attacker: supLabel, defender: tLabel, attackerRolls: aRoll.rolls, defenderRolls: dRoll.rolls, result: res, indirect: true } },
+    {
+      combat: {
+        attacker: supLabel,
+        defender: tLabel,
+        attackerRolls: aRoll.rolls,
+        defenderRolls: dRoll.rolls,
+        result: res,
+        indirect: true,
+        fortDefender: atTarget.fort,
+      },
+    },
   );
+  logFort(s, atTarget.fort, tLabel);
   if (defOut.becameWounded) log(s, 'result', `${t.owner} ${t.type} is wounded.`);
   if (defOut.destroyed) {
     t.status = 'dead';

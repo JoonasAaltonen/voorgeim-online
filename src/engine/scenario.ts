@@ -14,6 +14,8 @@ export interface ScenarioSide {
   support: boolean;
   /** Whether this side's units were revealed by enemy recon (affects deploy order). */
   reconRevealed: boolean;
+  /** Fortifications built beforehand, to be placed during deployment. */
+  fortifications: number;
 }
 
 export interface Scenario {
@@ -22,7 +24,7 @@ export interface Scenario {
 }
 
 export function emptyScenario(): Scenario {
-  const side = (): ScenarioSide => ({ roster: {}, support: false, reconRevealed: false });
+  const side = (): ScenarioSide => ({ roster: {}, support: false, reconRevealed: false, fortifications: 0 });
   return { attacker: 'p1', sides: { p1: side(), p2: side() } };
 }
 

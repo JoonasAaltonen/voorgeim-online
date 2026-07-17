@@ -121,6 +121,24 @@ const ARC_OFFSETS: Array<[number, number]> = [
   [-1, -2], [0, -2], [1, -2], // left line
 ];
 
+/**
+ * Global row an off-grid indirect-fire support shell "comes from": behind its
+ * own side, so it strikes the far side frontally but takes a fortification on
+ * its own side from the rear.
+ */
+export const SUPPORT_ORIGIN_GR = { top: -1, bottom: ROWS_PER_SIDE * 2 } as const;
+
+/**
+ * Fortifications face the frontline. They cover the front and both flanks — 5
+ * of the 8 surrounding positions — leaving the rear and the rear corners open.
+ * `fromGr` is the global row the attack originates from.
+ */
+export function fortCovers(fortCellId: string, fromGr: number): boolean {
+  const c = CELL_BY_ID[fortCellId];
+  if (!c || c.kind !== 'grid') return false;
+  return c.side === 'bottom' ? fromGr <= c.gr : fromGr >= c.gr;
+}
+
 /** Cells an artillery unit can reach with extended (ranged) fire. */
 export function artilleryArcCells(cellId: string): string[] {
   const c = CELL_BY_ID[cellId];

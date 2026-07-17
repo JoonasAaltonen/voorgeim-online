@@ -26,10 +26,16 @@ export interface UnitStats {
 export const UNIT_STATS: Record<UnitType, UnitStats> = {
   infantry:    { softAttack: 2, hardAttack: 1, breakthrough: 1, toughness: 3, hp: 4, targetClass: 'soft' },
   artillery:   { softAttack: 3, hardAttack: 1, breakthrough: 2, toughness: 2, hp: 2, targetClass: 'soft' },
-  'anti-tank': { softAttack: 0, hardAttack: 4, breakthrough: 1, toughness: 3, hp: 2, targetClass: 'soft' },
+  'anti-tank': { softAttack: 1, hardAttack: 3, breakthrough: 2, toughness: 2, hp: 2, targetClass: 'soft' },
   armor:       { softAttack: 2, hardAttack: 2, breakthrough: 3, toughness: 1, hp: 4, targetClass: 'hard' },
   recon:       { softAttack: 0, hardAttack: 0, breakthrough: 0, toughness: 0, hp: 1, targetClass: 'soft', mapOnly: true },
 };
+
+/**
+ * Hitpoints of a deployed fortification. It must be levelled before the unit
+ * occupying the slot takes any damage, and it never alters that unit's stats.
+ */
+export const FORT_HP = 2;
 
 /** Each player's starting roster (VOORGEIM.md "Initial units"). */
 export const STARTING_ARMY: Record<UnitType, number> = {

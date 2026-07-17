@@ -1,7 +1,13 @@
 import { coinAsset, isSupportUnit } from '../engine/types';
-import { currentDeployer, reserveUnits, type BattleState, type CombatEntry } from '../engine/battle';
+import {
+  currentDeployer,
+  reserveUnits,
+  stalemateLooms,
+  type BattleState,
+  type CombatEntry,
+} from '../engine/battle';
 import type { CombatResult } from '../engine/combat';
-import { useBattleStore } from '../state/battleStore';
+import { useBattleStore, FORT_SELECTION } from '../state/battleStore';
 import './BattlePanel.css';
 
 function attackerLine(r: CombatResult): string {
@@ -58,8 +64,21 @@ function CombatLogItem({ c }: { c: CombatEntry }) {
         <Dice rolls={c.defenderRolls} value={r.defenderRoll} />
         <span className="clog__calc">{defenderLine(r)}</span>
       </div>
+      {c.fortDefender && (
+        <div className="clog__fort">
+          🛡 Fortification soaks {c.fortDefender.absorbed} for {c.defender}
+          {c.fortDefender.destroyed ? ' — levelled' : ''}
+        </div>
+      )}
+      {c.fortAttacker && (
+        <div className="clog__fort">
+          🛡 Fortification soaks {c.fortAttacker.absorbed} for {c.attacker}
+          {c.fortAttacker.destroyed ? ' — levelled' : ''}
+        </div>
+      )}
       <div className="clog__dmg">
-        ⇒ {c.defender} −{r.damageToDefender} HP · {c.attacker} −{r.damageToAttacker} HP
+        ⇒ {c.defender} −{r.damageToDefender - (c.fortDefender?.absorbed ?? 0)} HP · {c.attacker} −
+        {r.damageToAttacker - (c.fortAttacker?.absorbed ?? 0)} HP
       </div>
     </div>
   );
@@ -69,8 +88,10 @@ function DeploymentControls({ battle }: { battle: BattleState }) {
   const selectedId = useBattleStore((s) => s.selectedId);
   const select = useBattleStore((s) => s.select);
   const pass = useBattleStore((s) => s.passDeploy);
+  const selectFort = useBattleStore((s) => s.selectFort);
   const deployer = currentDeployer(battle)!;
   const reserves = reserveUnits(battle, deployer);
+  const fortsLeft = battle.fortsLeft[deployer];
 
   return (
     <div className="panel__section">
@@ -78,7 +99,7 @@ function DeploymentControls({ battle }: { battle: BattleState }) {
         Deploying: <b>{deployer.toUpperCase()}</b> · front-to-back, row {battle.deploy!.row + 1} of 3
       </div>
       <div className="reserves">
-        {reserves.length === 0 && <span className="muted">No units left in reserve.</span>}
+        {reserves.length === 0 && fortsLeft === 0 && <span className="muted">No units left in reserve.</span>}
         {reserves.map((u) => (
           <button
             key={u.id}
@@ -90,8 +111,20 @@ function DeploymentControls({ battle }: { battle: BattleState }) {
             {isSupportUnit(u) ? 'support' : u.type}
           </button>
         ))}
+        {fortsLeft > 0 && (
+          <button
+            type="button"
+            className={`chip chip--fort${selectedId === FORT_SELECTION ? ' chip--sel' : ''}`}
+            onClick={selectFort}
+          >
+            🛡 fortification ×{fortsLeft}
+          </button>
+        )}
       </div>
-      <p className="hint">Pick a unit, then click a highlighted cell. Support goes in the left slot.</p>
+      <p className="hint">
+        Pick a unit, then click a highlighted cell. Support goes in the left slot. Fortifications
+        cover the front and flanks of the cell they are built on — the rear stays open.
+      </p>
       <button type="button" className="btn" onClick={pass}>
         {battle.deploy!.index === 0 ? 'Done placing — pass to opponent' : 'Finish this row'}
       </button>
@@ -109,6 +142,12 @@ function BattleControls({ battle }: { battle: BattleState }) {
       <div className={`turn turn--${battle.turn}`}>
         Turn: <b>{battle.turn.toUpperCase()}</b> — take one action
       </div>
+      {stalemateLooms(battle) && (
+        <div className="warn">
+          ⚑ <b>Stalemate next turn</b> — {battle.attacker.toUpperCase()} has pulled back to their
+          rear row. Move a unit over the initial frontline this turn to contest it.
+        </div>
+      )}
       {sel ? (
         <div className="selinfo">
           Selected: <b>{sel.owner} {isSupportUnit(sel) ? 'support artillery' : sel.type}</b> · {sel.hp} HP{sel.wounded ? ' (wounded)' : ''}

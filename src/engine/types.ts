@@ -5,6 +5,15 @@ import type { UnitType } from './units';
 
 export type Player = 'p1' | 'p2';
 
+/**
+ * The result of applying an intent to a state: the next state, plus the reason
+ * it was rejected. On rejection the state is returned unchanged.
+ */
+export interface StateTransition<S> {
+  state: S;
+  error?: string;
+}
+
 export const otherPlayer = (p: Player): Player => (p === 'p1' ? 'p2' : 'p1');
 
 /** Board side each player deploys on. p1 = bottom, p2 = top (matches the art). */
