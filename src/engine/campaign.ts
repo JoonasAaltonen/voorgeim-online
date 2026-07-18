@@ -21,6 +21,7 @@ import {
   fortKey,
   fortsAt,
   isRecon,
+  MASKED,
   occupies,
   unitsAtFor,
 } from './strategic';
@@ -31,9 +32,24 @@ function log(s: StrategicState, text: string): void {
   s.log.push({ id: s.seq++, kind: 'battle', text });
 }
 
-/** Fighting units (never recon) a player has standing in a node. */
+/** Fighting units (never recon) a player has standing in a node, organized or not. */
 function fightersAt(s: StrategicState, nodeId: NodeId, player: Player): MapUnit[] {
   return unitsAtFor(s, nodeId, player).filter((u) => !isRecon(u));
+}
+
+/**
+ * The units that can actually take the field here: in an army, and never recon.
+ *
+ * "Disorganized […] units can freely move in the strategic map […] but will need
+ * to be organized into armies to be used in battles." A node can easily hold
+ * both — walk ten units into three supply and the excess drops out of the army
+ * where it stands — and when the enemy attacks, only the army answers. The
+ * disorganized sit the fight out, sheltered by the army doing the fighting, and
+ * are dealt with by the battle's outcome: they fall back with a beaten force, or
+ * stay put after a stalemate, "not available for battles until reorganized."
+ */
+function combatantsAt(s: StrategicState, nodeId: NodeId, player: Player): MapUnit[] {
+  return fightersAt(s, nodeId, player).filter((u) => u.armyId);
 }
 
 /**
@@ -46,9 +62,12 @@ export function canInitiateBattle(s: StrategicState, nodeId: NodeId, player: Pla
   // "[Wounded units] can't participate in an attack against the enemy" — so the
   // attacker needs at least one able-bodied unit to lead the assault, not merely
   // a body in the node.
+  // Only armies fight, so only armies can start or answer a battle. A node
+  // holding nothing but disorganized units is overrun by an arriving army rather
+  // than fought over — that is `overrun`'s job, not a battle's.
   return (
-    fightersAt(s, nodeId, player).some((u) => !u.wounded) &&
-    fightersAt(s, nodeId, otherPlayer(player)).length > 0
+    combatantsAt(s, nodeId, player).some((u) => !u.wounded) &&
+    combatantsAt(s, nodeId, otherPlayer(player)).length > 0
   );
 }
 
@@ -80,8 +99,18 @@ export function supportGuns(s: StrategicState, nodeId: NodeId, player: Player): 
   return guns;
 }
 
-/** A strategic unit as it enters the battle board, carrying its real id. */
+/**
+ * A strategic unit as it enters the battle board, carrying its real id.
+ *
+ * Battles are only ever assembled from the server's own state, which never holds
+ * a masked chip — masking happens on the way out, in `viewFor`. A mask reaching
+ * here would mean a client's fogged copy was used as the source of truth, so it
+ * is worth failing loudly rather than fielding a unit with no stats.
+ */
 function toBattleUnit(u: MapUnit, support = false): BattleUnit {
+  if (u.type === MASKED) {
+    throw new Error(`Cannot field ${u.id}: a masked view unit is not a real unit.`);
+  }
   const wounded = !!u.wounded;
   return {
     id: u.id,
@@ -118,8 +147,8 @@ export function createBattleAt(
   // The attacking force leaves its wounded behind — they cannot join an assault.
   // The defender's wounded are dragged in all the same, entering face-up and
   // fighting at −1, because a defensive engagement is forced on them.
-  const attackerUnits = fightersAt(s, nodeId, attacker).filter((u) => !u.wounded);
-  const defenderUnits = fightersAt(s, nodeId, defender);
+  const attackerUnits = combatantsAt(s, nodeId, attacker).filter((u) => !u.wounded);
+  const defenderUnits = combatantsAt(s, nodeId, defender);
   const units: BattleUnit[] = [
     ...attackerUnits.map((u) => toBattleUnit(u)),
     ...defenderUnits.map((u) => toBattleUnit(u)),
@@ -144,13 +173,38 @@ export function createBattleAt(
   return { battle };
 }
 
-/** Move all of a player's fighting units (recon stays — it moves on its own) to `to`. */
-function performRetreat(s: StrategicState, player: Player, from: NodeId, to: NodeId): void {
+/**
+ * Move a named beaten force to `to`. Only the units listed — recon moves on its
+ * own, and disorganized units that were never in the fight hold their ground.
+ */
+function performRetreat(
+  s: StrategicState,
+  player: Player,
+  from: NodeId,
+  to: NodeId,
+  unitIds: string[],
+): void {
   const side = arrivalSide(s, to, player, from);
-  for (const u of fightersAt(s, from, player)) {
+  for (const id of unitIds) {
+    const u = s.units[id];
+    if (!u || u.nodeId !== from) continue; // died in the battle, or already moved
     u.nodeId = to;
     u.side = side;
   }
+}
+
+/**
+ * The loser's force that actually falls back: whoever is still in an army, plus
+ * anyone the battle turned loose by withdrawing them.
+ *
+ * The exclusion is the point — disorganized units that were standing in the node
+ * before the battle began never took part, so they do not get a free ride out on
+ * the back of a defeat. They stay where they are, and the winner's armies get one
+ * turn-start to overrun them (`standingOverrun`) unless their owner spends their
+ * own turn rescuing them.
+ */
+function retreatingForce(s: StrategicState, node: NodeId, loser: Player, battle: BattleState): MapUnit[] {
+  return fightersAt(s, node, loser).filter((u) => u.armyId || battle.units[u.id]);
 }
 
 /** Adjacent nodes a beaten force may fall back to: anywhere the winner is not. */
@@ -219,21 +273,22 @@ export function resolveBattle(s0: StrategicState, battle: BattleState): Transiti
   }
 
   const loser = otherPlayer(winner);
-  const retreating = fightersAt(s, node, loser);
+  const retreating = retreatingForce(s, node, loser, battle);
   if (retreating.length === 0) return { state: s };
+  const ids = retreating.map((u) => u.id);
 
   const options = retreatOptions(s, node, loser);
   if (options.length === 0) {
-    for (const u of retreating) delete s.units[u.id];
+    for (const id of ids) delete s.units[id];
     log(s, `${playerLabel(loser)} is encircled at ${node} — the withdrawn units are destroyed.`);
     return { state: s };
   }
   if (options.length === 1) {
-    performRetreat(s, loser, node, options[0]);
+    performRetreat(s, loser, node, options[0], ids);
     log(s, `${playerLabel(loser)} falls back from ${node} to ${options[0]}.`);
     return { state: s };
   }
-  s.pendingRetreat = { player: loser, from: node, options };
+  s.pendingRetreat = { player: loser, from: node, options, units: ids };
   log(s, `${playerLabel(loser)} must choose where to fall back from ${node}.`);
   return { state: s };
 }
@@ -245,7 +300,7 @@ export function resolveRetreat(s0: StrategicState, to: NodeId): Transition {
   if (!pr.options.includes(to)) return { state: s0, error: 'Cannot fall back there.' };
 
   const s = clone(s0);
-  performRetreat(s, pr.player, pr.from, to);
+  performRetreat(s, pr.player, pr.from, to, pr.units);
   s.pendingRetreat = null;
   log(s, `${playerLabel(pr.player)} falls back from ${pr.from} to ${to}.`);
   return { state: s };

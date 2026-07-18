@@ -60,6 +60,10 @@ interface Store {
   initiateBattle: (nodeId: NodeId) => void;
   /** The beaten side names where to fall back to. */
   retreat: (nodeId: NodeId) => void;
+  /** Roll a scout against an enemy army sharing its node. */
+  recon: (reconId: string, targetArmyId: string) => void;
+  /** Done scouting — keep the turn, move on to the strategic actions. */
+  endRecon: () => void;
   endTurn: () => void;
   reset: () => void;
 }
@@ -174,6 +178,13 @@ export const useStrategicStore = create<Store>((set, get) => ({
     session().dispatch({ t: 'stratRetreat', nodeId });
   },
 
+  recon: (reconId, targetArmyId) => {
+    session().dispatch({ t: 'stratRecon', reconId, targetArmyId });
+    // The scout has spent its action either way — and on a 1 it is gone — so
+    // never leave it sitting in the player's hand as if it were still holdable.
+    set({ sel: null });
+  },
+  endRecon: () => session().dispatch({ t: 'stratEndRecon' }),
   endTurn: () => session().dispatch({ t: 'stratEndTurn' }),
   reset: () => {
     set({ sel: null, inspectedNode: STAGING_NODE.p1, reorgNode: null });

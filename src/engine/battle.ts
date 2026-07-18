@@ -82,6 +82,18 @@ export interface BattleState {
   /** Fortifications each player still has to place during deployment. */
   fortsLeft: Record<Player, number>;
   deploy: DeployState | null;
+  /**
+   * The attacker *ended one of their own turns* fully withdrawn to the back row.
+   *
+   * The manual's stalemate is something the attacker does — "the attacker
+   * withdraws all units to the rearmost line" — not something that merely
+   * becomes true of them. Without this flag, a defender who kills the last
+   * forward attacker unit disengages the attacker on the defender's behalf, and
+   * the battle is called off before the attacker gets a turn to push back out.
+   * Recording it at the attacker's own turn boundary is what makes the
+   * difference between withdrawing and being shot back.
+   */
+  attackerBrokeOff: boolean;
   winner: Player | 'stalemate' | null;
   log: LogEntry[];
   seq: number;
@@ -200,6 +212,8 @@ export function assembleBattle(params: {
       p2: Math.max(0, params.fortsLeft.p2),
     },
     deploy: { row: 0, index: 0, firstDeployer: fd },
+    // The attacker acts first, so they have not yet had a turn to break off in.
+    attackerBrokeOff: false,
     winner: null,
     log: [],
     seq: 0,
@@ -322,14 +336,15 @@ function defenderContests(s: BattleState): boolean {
 }
 
 /**
- * True while the defender is on their last chance: the attacker has disengaged
- * and nothing is over the line, so ending this turn without contesting settles
- * the battle as a stalemate. Mirrors the check in `endTurn`.
+ * True while the defender is on their last chance: the attacker broke off on
+ * their own turn and nothing is over the line, so ending this turn without
+ * contesting settles the battle as a stalemate. Mirrors the check in `endTurn`.
  */
 export function stalemateLooms(s: BattleState): boolean {
   return (
     s.phase === 'battle' &&
     s.turn === s.defender &&
+    s.attackerBrokeOff &&
     attackerHasDisengaged(s) &&
     !defenderContests(s)
   );
@@ -337,10 +352,20 @@ export function stalemateLooms(s: BattleState): boolean {
 
 function endTurn(s: BattleState): void {
   if (s.phase === 'over') return;
+  const wasAttackers = s.turn === s.attacker;
   s.turn = otherPlayer(s.turn);
-  // Checked as the attacker regains the initiative, so the defender has always
-  // had one turn to answer the disengagement before the battle is called off.
-  if (s.turn === s.attacker && attackerHasDisengaged(s) && !defenderContests(s)) {
+
+  if (wasAttackers) {
+    // The attacker has finished a turn. Whether they are dug into the back row
+    // *now*, having had the chance to come out, is what counts as breaking off.
+    s.attackerBrokeOff = attackerHasDisengaged(s);
+    return;
+  }
+
+  // The defender has finished a turn. Settle the stalemate only if the attacker
+  // broke off under their own steam, is still back there, and this turn — the
+  // defender's one chance to answer — did not push anyone over the line.
+  if (s.attackerBrokeOff && attackerHasDisengaged(s) && !defenderContests(s)) {
     finish(s, 'stalemate');
   }
 }

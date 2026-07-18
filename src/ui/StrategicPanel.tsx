@@ -1,6 +1,7 @@
 import { NODE_BY_ID, isAsymmetric, isSea, isStaging, slotsFor, type NodeId } from '../engine/map';
 import {
   ACTIONS_PER_TURN,
+  RECON_ACTIONS,
   MAX_ARMIES,
   MAX_LOOSE_MOVE,
   armiesAt,
@@ -10,13 +11,18 @@ import {
   canFreeReorg,
   canReorganize,
   controlFor,
+  doorstep,
   fortsAt,
+  HOLD_TO_WIN,
+  isRecon,
   looseAt,
+  MASKED,
   occupies,
   reconAt,
   sideOf,
   supplyCap,
   supplyUsed,
+  type MaskedType,
   type StrategicState,
 } from '../engine/strategic';
 import { canInitiateBattle } from '../engine/campaign';
@@ -29,9 +35,19 @@ import './StrategicPanel.css';
 
 const cap = (n: number) => (n === Infinity ? '∞' : n);
 
+/**
+ * What a coin can depict: a real unit type, or a face-down enemy chip. Masked
+ * units group together like any other "type", which is right — face down, they
+ * really are interchangeable to the player looking at them.
+ */
+type CoinType = UnitType | MaskedType;
+
+/** What to call a coin in alt text and tooltips. */
+const coinName = (t: CoinType) => (t === MASKED ? 'unidentified enemy unit' : t);
+
 /** One chip per unit type, since units of a type are interchangeable here. */
-function byType(units: { id: string; type: UnitType }[]): [UnitType, string[]][] {
-  const m = new Map<UnitType, string[]>();
+function byType(units: { id: string; type: CoinType }[]): [CoinType, string[]][] {
+  const m = new Map<CoinType, string[]>();
   for (const u of units) m.set(u.type, [...(m.get(u.type) ?? []), u.id]);
   return [...m];
 }
@@ -43,11 +59,11 @@ function byType(units: { id: string; type: UnitType }[]): [UnitType, string[]][]
  */
 interface CoinGroup {
   key: string;
-  type: UnitType;
+  type: CoinType;
   wounded: boolean;
   ids: string[];
 }
-function coinGroups(units: { id: string; type: UnitType; wounded?: boolean }[]): CoinGroup[] {
+function coinGroups(units: { id: string; type: CoinType; wounded?: boolean }[]): CoinGroup[] {
   const m = new Map<string, CoinGroup>();
   for (const u of units) {
     const wounded = !!u.wounded;
@@ -59,11 +75,98 @@ function coinGroups(units: { id: string; type: UnitType; wounded?: boolean }[]):
   return [...m.values()];
 }
 
-/** An army: its coins, its strength, and the free split-off control. */
-function ArmyRow({ s, armyId, mine }: { s: StrategicState; armyId: string; mine: boolean }) {
+/**
+ * How close each side is to winning. Two things have to be legible, and they are
+ * not the same thing: how much of the enemy's doorstep you hold *right now*, and
+ * how many of your own turns you have held all of it. The second only starts
+ * counting once the first is complete, and it snaps back to zero the moment the
+ * ring is broken — so showing the turn count alone would look arbitrary.
+ *
+ * `eye` is the viewer's seat, so the copy can say "you" and mean it.
+ */
+function VictoryTrack({ s, eye }: { s: StrategicState; eye: Player | null }) {
+  const rows = PLAYERS.map((p) => {
+    const ring = doorstep(otherPlayer(p));
+    const held = ring.filter((n) => occupies(s, n, p)).length;
+    return {
+      p,
+      ring,
+      held,
+      complete: ring.length > 0 && held === ring.length,
+      turns: s.hold[p],
+    };
+  });
+  // The one case worth shouting about: someone wins on their next turn.
+  const imminent = rows.find((r) => r.complete && r.turns >= HOLD_TO_WIN - 1);
+
+  return (
+    <div className="spanel__section">
+      <div className="spanel__title">Victory</div>
+      <p className="smuted">
+        Hold every location bordering the enemy staging area at the end of {HOLD_TO_WIN} rounds.
+        The count is scored once both players have moved, so the defender always gets a turn to
+        break the ring.
+      </p>
+
+      {rows.map(({ p, ring, held, complete, turns }) => (
+        <div key={p} className="vtrack">
+          <span className={`side__who side__who--${p}`}>{playerLabel(p)}</span>
+          <span
+            className="vtrack__ring"
+            title={`Holds ${held} of ${ring.length}: ${ring.join(', ')}`}
+          >
+            {ring.map((n) => (
+              <i key={n} className={occupies(s, n, p) ? 'vdot vdot--on' : 'vdot'} />
+            ))}
+            <span className="vtrack__n">
+              {held}/{ring.length}
+            </span>
+          </span>
+          <span className={complete ? 'vtrack__turns vtrack__turns--live' : 'vtrack__turns'}>
+            {complete ? `${turns}/${HOLD_TO_WIN} rounds held` : 'ring broken'}
+          </span>
+        </div>
+      ))}
+
+      {imminent && (
+        <p className={`vwarn${imminent.p === eye ? ' vwarn--mine' : ''}`}>
+          {imminent.p === eye ? (
+            <>
+              <b>You win at the end of this round</b> if the ring is still whole when{' '}
+              {playerLabel(otherPlayer(imminent.p))} has finished their turn.
+            </>
+          ) : (
+            <>
+              <b>{playerLabel(imminent.p)} wins at the end of this round.</b> Break the ring before
+              it is scored — retake any one of those locations.
+            </>
+          )}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * An army: its coins, its strength, and the free split-off control. `scoutId` is
+ * set when the viewer is holding a recon unit that shares this army's node, which
+ * is exactly when scouting it is on offer.
+ */
+function ArmyRow({
+  s,
+  armyId,
+  mine,
+  scoutId,
+}: {
+  s: StrategicState;
+  armyId: string;
+  mine: boolean;
+  scoutId?: string;
+}) {
   const sel = useStrategicStore((st) => st.sel);
   const selectArmy = useStrategicStore((st) => st.selectArmy);
   const split = useStrategicStore((st) => st.split);
+  const recon = useStrategicStore((st) => st.recon);
   const units = armyUnits(s, armyId);
   const held = sel?.kind === 'army' && sel.armyId === armyId;
 
@@ -82,8 +185,12 @@ function ArmyRow({ s, armyId, mine }: { s: StrategicState; armyId: string; mine:
             <span key={g.key} className={`army__coin${g.wounded ? ' army__coin--wounded' : ''}`}>
               <img
                 src={coinAsset(g.type, s.units[g.ids[0]].owner)}
-                alt={g.type}
-                title={g.wounded ? `${g.type} — wounded (heals only in staging)` : g.type}
+                alt={coinName(g.type)}
+                title={
+                  g.wounded
+                    ? `${g.type} — wounded (heals only in staging)`
+                    : coinName(g.type)
+                }
               />
               {g.wounded && <span className="army__wound" aria-hidden>✚</span>}
               {g.ids.length > 1 && <span className="army__x">{g.ids.length}</span>}
@@ -103,6 +210,16 @@ function ArmyRow({ s, armyId, mine }: { s: StrategicState; armyId: string; mine:
           split
         </button>
       )}
+      {scoutId && (
+        <button
+          type="button"
+          className="army__recon"
+          onClick={() => recon(scoutId, armyId)}
+          title="Roll this scout against the army — 1 loses the scout, 6 reveals the whole location"
+        >
+          scout
+        </button>
+      )}
     </div>
   );
 }
@@ -119,6 +236,33 @@ function NodeSide({ nodeId, owner, mine }: { nodeId: NodeId; owner: Player; mine
   const limit = supplyCap(s, nodeId, owner);
   const over = used > limit;
   const forts = fortsAt(s, nodeId, owner);
+
+  // Stragglers with no army of their own to shelter behind, on ground an enemy
+  // army holds, are swept up when that enemy next opens a turn. The board gives
+  // no other warning — they simply stop existing — so say it plainly here.
+  const atRisk =
+    loose.length > 0 &&
+    armies.length === 0 &&
+    !isSea(nodeId) &&
+    !isStaging(nodeId) &&
+    armiesAt(s, nodeId, otherPlayer(owner)).length > 0;
+
+  // Scouting is on offer when the player is holding one of their own scouts, it
+  // is standing in this node, this side of the node is the enemy's, and the recon
+  // phase still has an action in it. The engine re-checks all of this; the point
+  // here is only to not show a button that is going to be refused.
+  const heldScout =
+    sel?.kind === 'loose' && sel.unitIds.length === 1 ? s.units[sel.unitIds[0]] : undefined;
+  const scoutId =
+    !mine &&
+    s.phase === 'recon' &&
+    s.actionsLeft > 0 &&
+    heldScout &&
+    isRecon(heldScout) &&
+    heldScout.owner !== owner &&
+    heldScout.nodeId === nodeId
+      ? heldScout.id
+      : undefined;
 
   if (armies.length === 0 && loose.length === 0 && recon.length === 0 && forts === 0) {
     return (
@@ -149,8 +293,21 @@ function NodeSide({ nodeId, owner, mine }: { nodeId: NodeId; owner: Player; mine
       </div>
 
       {armies.map((a) => (
-        <ArmyRow key={a.id} s={s} armyId={a.id} mine={mine} />
+        <ArmyRow key={a.id} s={s} armyId={a.id} mine={mine} scoutId={scoutId} />
       ))}
+
+      {atRisk && (
+        <p className={`overrun-warn${mine ? ' overrun-warn--mine' : ''}`}>
+          {mine ? (
+            <>
+              <b>⚠ Overrun next enemy turn.</b> These units have no army here to
+              shelter behind. Move them out, or bring an army in to cover them.
+            </>
+          ) : (
+            <>⚠ Unsheltered — your army overruns these when you next open a turn.</>
+          )}
+        </p>
+      )}
 
       {loose.length > 0 && (
         <div className="loose">
@@ -230,6 +387,8 @@ export function StrategicPanel() {
   const error = useSession((st) => st.error);
   const clearError = useSession((st) => st.clearError);
   const endTurn = useStrategicStore((st) => st.endTurn);
+  const endRecon = useStrategicStore((st) => st.endRecon);
+  const recon = s.phase === 'recon';
   const reset = useStrategicStore((st) => st.reset);
 
   const node = inspected ? NODE_BY_ID[inspected] : undefined;
@@ -316,11 +475,24 @@ export function StrategicPanel() {
 
       <div className="spanel__section">
         <div className={`sturn sturn--${s.turn}`}>
-          Round {s.round} · <b>{playerLabel(s.turn)}</b> · {s.actionsLeft} of {ACTIONS_PER_TURN}{' '}
-          action{s.actionsLeft === 1 ? '' : 's'} left
+          Round {s.round} · <b>{playerLabel(s.turn)}</b> · {recon ? 'recon' : 'strategic'} phase ·{' '}
+          {s.actionsLeft} of {recon ? RECON_ACTIONS : ACTIONS_PER_TURN} action
+          {s.actionsLeft === 1 ? '' : 's'} left
         </div>
 
-        {sel?.kind === 'army' ? (
+        {recon ? (
+          <p className="shint">
+            Scouting. Move a recon unit — it travels alone, ignores enemy armies and costs no
+            supply. Armies wait until the recon phase is over.
+          </p>
+        ) : s.actionsLeft === 0 ? (
+          // Spent, but still your turn: the battle you just walked into is the
+          // reason the turn does not end itself.
+          <p className="shint">
+            <b>Out of actions.</b> You may still attack from a location where you meet the enemy.
+            Ending your turn runs the supply check, which disorganizes anything overstacked.
+          </p>
+        ) : sel?.kind === 'army' ? (
           <p className="shint">
             Holding an army of <b>{armyUnits(s, sel.armyId).length}</b>. <b>Right-click</b> a
             highlighted location to send it there; left-click anywhere to let it go.
@@ -345,9 +517,15 @@ export function StrategicPanel() {
           {playerLabel(s.turn)} fields {armyCount(s, s.turn)} of {MAX_ARMIES} armies.
         </p>
 
-        <button type="button" className="sbtn" onClick={endTurn}>
-          End {playerLabel(s.turn)}'s turn
-        </button>
+        {recon ? (
+          <button type="button" className="sbtn" onClick={endRecon}>
+            Done scouting — start {playerLabel(s.turn)}'s strategic phase
+          </button>
+        ) : (
+          <button type="button" className="sbtn" onClick={endTurn}>
+            End {playerLabel(s.turn)}'s turn
+          </button>
+        )}
       </div>
 
       {error && (
@@ -355,6 +533,8 @@ export function StrategicPanel() {
           {error}
         </div>
       )}
+
+      <VictoryTrack s={s} eye={eye} />
 
       {node && (
         <div className="spanel__section">

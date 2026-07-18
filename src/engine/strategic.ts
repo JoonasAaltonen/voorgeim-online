@@ -5,6 +5,21 @@
 // is where re-hiding will hook in), and battles triggered by two armies meeting
 // (Phase 7 — today they simply stand in the same node).
 //
+// Vocabulary, used exactly this way throughout the codebase:
+//
+//   Round — the whole sequence in which *both* players take their halves, in
+//           whichever order the initiative gave them. Ends when the second
+//           player is done; `endOfRound` runs there, then initiative re-rolls.
+//   Turn  — one player's half of a round: their recon phase, then their
+//           strategic phase. `ACTIONS_PER_TURN` and `RECON_ACTIONS` are the
+//           budgets within it.
+//
+// The two are not interchangeable, and getting them confused has cost real
+// games: turn order is *not* an alternation, so a player can take two turns
+// back to back across a round boundary. Anything that must give the opponent a
+// chance to respond therefore belongs to the round (`endOfRound`), while a
+// player's own housekeeping — supply, overrun — belongs to the turn.
+//
 // The one structural decision worth knowing before reading on: a unit's node is
 // stored on the unit and *only* on the unit. An `Army` is a bare grouping token
 // with no location of its own, so an army's position is derived from its
@@ -27,10 +42,12 @@ import {
   isStaging,
   slotsFor,
 } from './map';
-import { defaultRng, rollUntilDifferent, type Rng } from './dice';
+import { defaultRng, rollD6, rollUntilDifferent, type Rng } from './dice';
 
 /** Strategic actions a player takes per turn, sequentially (VOORGEIM.md). */
 export const ACTIONS_PER_TURN = 2;
+/** The recon phase gets its own budget: move a scout, or make an attempt. */
+export const RECON_ACTIONS = 2;
 
 /** "Players can have a total of 10 active armies." */
 export const MAX_ARMIES = 10;
@@ -73,9 +90,21 @@ export interface Army {
   movedAt: number;
 }
 
+/**
+ * What an enemy chip's `type` reads as while it is still face down. A view-only
+ * value: the server's own state never holds it, only the per-seat copies
+ * `viewFor` builds. It is a member of the field's type rather than a separate
+ * unit shape so that a client can keep passing views to the ordinary engine
+ * helpers — the cost is that anything reading `type` has to consider it, which
+ * is exactly the check that keeps a hidden unit from leaking.
+ */
+export const MASKED = 'unknown';
+export type MaskedType = typeof MASKED;
+
 export interface MapUnit {
   id: string;
-  type: UnitType;
+  /** `MASKED` on an enemy unit this viewer has not revealed — see `maskFor`. */
+  type: UnitType | MaskedType;
   owner: Player;
   /** The node it currently stands on. */
   nodeId: NodeId;
@@ -100,10 +129,36 @@ export interface MapUnit {
   /**
    * The enemy has seen what this is — by fighting it, or (Phase 6) by reconning
    * it. Cleared by reorganizing in a controlled node, which is the manual's only
-   * way back into the fog. Nothing filters on this yet; Phase 6 is what makes it
-   * bite, and until then it is honest bookkeeping the UI can already show.
+   * way back into the fog. `maskFor` is what makes it bite.
    */
   revealed?: boolean;
+}
+
+/**
+ * The fog of war, applied at the one seam where it can be applied honestly:
+ * building the copy of the board a given player is sent. Everything they have
+ * not earned sight of — every enemy unit not `revealed` by a battle or by recon
+ * — comes back as a face-down chip.
+ *
+ * What stays visible is what a chip on the physical table gives away by simply
+ * being there: that it exists, whose it is, where it stands, which side of an
+ * asymmetric node, and which army it is stacked with. What goes is what the
+ * face would tell you: the type, and whether it is wounded.
+ *
+ * Recon units are never masked. The tabletop game cannot hide them — a scout
+ * moves in its own phase, in front of the other player — so hiding them here
+ * would enforce a secret the real game does not keep. It also keeps the fog
+ * honest arithmetic: every masked chip is a fighting unit, so control and supply
+ * still come out right when computed from a fogged view.
+ */
+export function maskFor(player: Player, state: StrategicState): StrategicState {
+  const s = clone(state);
+  for (const u of Object.values(s.units)) {
+    if (u.owner === player || u.revealed || isRecon(u)) continue;
+    u.type = MASKED;
+    delete u.wounded;
+  }
+  return s;
 }
 
 /**
@@ -121,9 +176,16 @@ export interface PendingRetreat {
   from: NodeId;
   /** Adjacent nodes free of the winner: "a friendly or neutral adjacent node". */
   options: NodeId[];
+  /**
+   * Exactly who falls back. Named rather than recomputed, because by the time
+   * the player answers, the battle is over and the withdrawn are indistinguishable
+   * from the disorganized units that were standing in the node all along — and
+   * those stay put.
+   */
+  units: string[];
 }
 
-/** Nodes to hold, and turns to hold them, to win. */
+/** Rounds the enemy doorstep must be held, in full, to win. */
 export const HOLD_TO_WIN = 2;
 
 export type StratLogKind = 'info' | 'move' | 'turn' | 'org' | 'battle';
@@ -134,9 +196,17 @@ export interface StratLogEntry {
   text: string;
 }
 
+/**
+ * A turn runs Recon → Strategic. Each is its own action budget, so a scout that
+ * spends the recon phase does not cost the player an army move.
+ */
+export type Phase = 'recon' | 'strategic';
+
 export interface StrategicState {
   turn: Player;
-  /** Strategic actions the current player has left this turn. */
+  /** Which half of the current player's turn is live. */
+  phase: Phase;
+  /** Actions the current player has left in the *current phase*. */
   actionsLeft: number;
   /** Increments when both players have taken their turn. */
   round: number;
@@ -163,7 +233,7 @@ export interface StrategicState {
    * rather than interrupting the attacker's).
    */
   freeReorgs: Record<string, Player>;
-  /** Consecutive own-turns each player has held the enemy's doorstep. */
+  /** Consecutive *rounds* each player has held the enemy's doorstep. */
   hold: Record<Player, number>;
   winner: Player | null;
   /** Set only between a lost battle and the loser naming a destination. */
@@ -186,10 +256,15 @@ function log(s: StrategicState, kind: StratLogKind, text: string): void {
  * "Each turn starts with a dice roll for initiative to decide which player starts
  * the sequence. Roll until one player has a greater value."
  *
+ * The manual's "each turn" is a *round* in this codebase's vocabulary — the roll
+ * decides who takes the first of the round's two turns, and happens once per
+ * round, not once per turn.
+ *
  * Consequence worth stating out loud, because it looks like a bug the first time
  * you meet it: turn order is *not* an alternation. Lose initiative one round and
  * win it the next and you move twice in a row — which is a real weapon, and the
- * reason the roll exists.
+ * reason the roll exists. It is also the reason `endOfRound` exists: anything
+ * that owes the opponent a chance to respond cannot be scored on a turn.
  */
 function rollInitiative(rng: Rng): { winner: Player; win: number; lose: number } {
   const { a, b } = rollUntilDifferent(rng);
@@ -211,7 +286,9 @@ export function createStrategic(rng: Rng = defaultRng): StrategicState {
   const first = opening.winner;
   const s: StrategicState = {
     turn: first,
-    actionsLeft: ACTIONS_PER_TURN,
+    // Both sides start with scouts in staging, so the game always opens on recon.
+    phase: 'recon',
+    actionsLeft: RECON_ACTIONS,
     round: 1,
     firstPlayer: first,
     units,
@@ -229,7 +306,7 @@ export function createStrategic(rng: Rng = defaultRng): StrategicState {
   log(
     s,
     'turn',
-    `Round 1 — ${playerLabel(first)} wins initiative ${opening.win}–${opening.lose} and has ${ACTIONS_PER_TURN} actions.`,
+    `Round 1 — ${playerLabel(first)} wins initiative ${opening.win}–${opening.lose} and has ${RECON_ACTIONS} recon actions.`,
   );
   return s;
 }
@@ -277,7 +354,9 @@ export function armiesAt(s: StrategicState, nodeId: NodeId, player: Player): Arm
  * weapon, which is plainly not what a recon unit is for. So recon is invisible to
  * supply and control alike.
  */
-export const isRecon = (u: MapUnit): boolean => isMapOnly(u.type);
+// Scouts are never masked (see `maskFor`), so a masked chip is always a fighting
+// unit — the `MASKED` arm is a type guard, not a judgement call.
+export const isRecon = (u: MapUnit): boolean => u.type !== MASKED && isMapOnly(u.type);
 
 /** A player's recon units in a node. */
 export function reconAt(s: StrategicState, nodeId: NodeId, player: Player): MapUnit[] {
@@ -420,9 +499,21 @@ function pruneForts(s: StrategicState, nodeId: NodeId): void {
  * decided, or the board is waiting on a loser to retreat. Both freeze play for
  * everyone, so every action asks this first.
  */
-function frozen(s: StrategicState): string | null {
+const offPhase = (needs: Phase): string =>
+  needs === 'strategic'
+    ? 'The recon phase is not over yet.'
+    : 'The recon phase is over for this turn.';
+
+/**
+ * The reasons nothing may happen right now. `needs` is the phase the action
+ * belongs to; almost everything is strategic, so that is the default. Pass
+ * `'any'` for the handful of free, out-of-band actions (the post-battle
+ * reshuffle) that are not spending a budget and so belong to no phase.
+ */
+function frozen(s: StrategicState, needs: Phase | 'any' = 'strategic'): string | null {
   if (s.winner) return 'The game is over.';
   if (s.pendingRetreat) return `${playerLabel(s.pendingRetreat.player)} must retreat first.`;
+  if (needs !== 'any' && s.phase !== needs) return offPhase(needs);
   return null;
 }
 
@@ -433,6 +524,7 @@ export function legalArmyTargets(s: StrategicState, armyId: string): NodeId[] {
   const a = s.armies[armyId];
   const from = a ? armyNode(s, a.id) : null;
   if (!a || !from || a.owner !== s.turn || s.actionsLeft <= 0) return [];
+  if (s.phase !== 'strategic') return [];
   return NODE_BY_ID[from]?.adjacency ?? [];
 }
 
@@ -446,8 +538,9 @@ export function legalLooseTargets(s: StrategicState, unitId: string): NodeId[] {
   if (!u || u.armyId || u.owner !== s.turn || s.actionsLeft <= 0) return [];
   const adj = NODE_BY_ID[u.nodeId]?.adjacency ?? [];
   // Walking onto an enemy army is the whole job of a recon unit and certain
-  // death for anyone else.
-  if (isRecon(u)) return adj;
+  // death for anyone else. Each also moves on its own phase's budget.
+  if (isRecon(u)) return s.phase === 'recon' ? adj : [];
+  if (s.phase !== 'strategic') return [];
   const enemy = otherPlayer(u.owner);
   return adj.filter((n) => armiesAt(s, n, enemy).length === 0);
 }
@@ -467,6 +560,8 @@ function overrun(s: StrategicState, nodeId: NodeId, by: Player): void {
   const caught = looseAt(s, nodeId, victim);
   if (caught.length === 0) return;
   for (const u of caught) delete s.units[u.id];
+  // Naming these is deliberate, and the one place the log may: they are being
+  // taken off the board, which on the table means both players see the faces.
   const what = caught.map((u) => u.type).join(', ');
   log(s, 'org', `${playerLabel(victim)} loses ${caught.length} overrun at ${nodeId} (${what}).`);
 }
@@ -475,7 +570,6 @@ export function moveArmy(
   state: StrategicState,
   armyId: string,
   nodeId: NodeId,
-  rng: Rng = defaultRng,
 ): Transition {
   const stop = frozen(state);
   if (stop) return { state, error: stop };
@@ -499,7 +593,7 @@ export function moveArmy(
     u.side = side;
   }
   s.armies[armyId].movedAt = ++s.tick;
-  s.actionsLeft--;
+  spend(s);
   log(s, 'move', `${playerLabel(a.owner)} army of ${moved.length} moves ${from} → ${nodeId}.`);
   overrun(s, nodeId, a.owner);
   // Forts stay behind, so a node the army just vacated may have lost its last
@@ -510,7 +604,6 @@ export function moveArmy(
   if (s.freeReorgs[from] === a.owner && armiesAt(s, from, a.owner).length < 2) {
     delete s.freeReorgs[from];
   }
-  if (s.actionsLeft === 0) passTurn(s, rng);
   return { state: s };
 }
 
@@ -519,9 +612,10 @@ export function moveLoose(
   state: StrategicState,
   unitIds: string[],
   nodeId: NodeId,
-  rng: Rng = defaultRng,
 ): Transition {
-  const stop = frozen(state);
+  // Which phase this move belongs to depends on *what* is moving, so the phase
+  // check has to wait until the units are resolved.
+  const stop = frozen(state, 'any');
   if (stop) return { state, error: stop };
   const ids = [...new Set(unitIds)];
   if (ids.length === 0) return { state, error: 'No units chosen.' };
@@ -546,6 +640,9 @@ export function moveLoose(
   if (recon.length > 0 && ids.length > 1) {
     return { state, error: 'A recon unit moves on its own.' };
   }
+  // Scouts move on the recon phase's budget; everyone else on the strategic one.
+  const needs: Phase = recon.length > 0 ? 'recon' : 'strategic';
+  if (state.phase !== needs) return { state, error: offPhase(needs) };
   if (recon.length === 0 && armiesAt(state, nodeId, otherPlayer(state.turn)).length > 0) {
     return { state, error: 'Disorganized units cannot move onto an enemy army.' };
   }
@@ -557,10 +654,15 @@ export function moveLoose(
     // Recon holds no ground, so it takes no side with it.
     if (!isRecon(s.units[id])) s.units[id].side = side;
   }
-  s.actionsLeft--;
-  const what = ids.length === 1 ? us[0].type : `${ids.length} disorganized units`;
+  // Never the unit's type: the log is one shared list, read by both players, so
+  // naming a face-down chip here would undo the fog `maskFor` puts on the board.
+  const what = isRecon(us[0])
+    ? 'a recon unit'
+    : ids.length === 1
+      ? 'a disorganized unit'
+      : `${ids.length} disorganized units`;
   log(s, 'move', `${playerLabel(us[0].owner)} ${what} moves ${from} → ${nodeId}.`);
-  if (s.actionsLeft === 0) passTurn(s, rng);
+  spend(s);
   return { state: s };
 }
 
@@ -577,7 +679,6 @@ export function moveLoose(
 export function swapSide(
   state: StrategicState,
   nodeId: NodeId,
-  rng: Rng = defaultRng,
 ): Transition {
   const stop = frozen(state);
   if (stop) return { state, error: stop };
@@ -600,9 +701,8 @@ export function swapSide(
   for (const u of unitsAtFor(s, nodeId, player)) {
     if (!isRecon(u)) u.side = to;
   }
-  s.actionsLeft--;
+  spend(s);
   log(s, 'move', `${playerLabel(player)} crosses to the other side of ${nodeId}.`);
-  if (s.actionsLeft === 0) passTurn(s, rng);
   return { state: s };
 }
 
@@ -614,7 +714,6 @@ export function swapSide(
 export function buildFort(
   state: StrategicState,
   nodeId: NodeId,
-  rng: Rng = defaultRng,
 ): Transition {
   const stop = frozen(state);
   if (stop) return { state, error: stop };
@@ -627,13 +726,12 @@ export function buildFort(
 
   const s = clone(state);
   s.forts[fortKey(nodeId, player)] = fortsAt(s, nodeId, player) + 1;
-  s.actionsLeft--;
+  spend(s);
   log(
     s,
     'org',
     `${playerLabel(player)} fortifies ${nodeId} (${s.forts[fortKey(nodeId, player)]} ready).`,
   );
-  if (s.actionsLeft === 0) passTurn(s, rng);
   return { state: s };
 }
 
@@ -673,7 +771,6 @@ export function reorganize(
   state: StrategicState,
   nodeId: NodeId,
   assign: Reassignment,
-  rng: Rng = defaultRng,
 ): Transition {
   const stop = frozen(state);
   if (stop) return { state, error: stop };
@@ -729,14 +826,13 @@ export function reorganize(
   dissolveEmpty(s);
   settleReorg(s, nodeId, player, true);
 
-  s.actionsLeft--;
+  spend(s);
   const n = armiesAt(s, nodeId, player).length;
   log(
     s,
     'org',
     `${playerLabel(player)} reorganizes at ${nodeId} — ${n} arm${n === 1 ? 'y' : 'ies'} here now.`,
   );
-  if (s.actionsLeft === 0) passTurn(s, rng);
   return { state: s };
 }
 
@@ -758,7 +854,7 @@ function settleReorg(s: StrategicState, nodeId: NodeId, player: Player, hide: bo
     if (u.wounded && inStaging) {
       delete u.wounded;
       delete u.revealed;
-      log(s, 'org', `${playerLabel(player)} ${u.type} is reinforced to full strength.`);
+      log(s, 'org', `${playerLabel(player)} reinforces a wounded unit to full strength.`);
     } else if (u.wounded) {
       u.revealed = true; // stays face-up outside staging
     } else if (hide) {
@@ -784,7 +880,8 @@ export function freeReorganize(
   nodeId: NodeId,
   assign: Reassignment,
 ): Transition {
-  const stop = frozen(state);
+  // Free and out-of-band: it spends no budget, so it belongs to no phase.
+  const stop = frozen(state, 'any');
   if (stop) return { state, error: stop };
   const player = state.turn;
   if (!NODE_BY_ID[nodeId]) return { state, error: 'Unknown location.' };
@@ -879,7 +976,7 @@ function enforceSupply(s: StrategicState, player: Player): void {
       log(
         s,
         'org',
-        `${playerLabel(player)} ${shed.type} at ${n.id} is out of supply and disorganizes.`,
+        `${playerLabel(player)} has a unit at ${n.id} out of supply — it disorganizes.`,
       );
       dissolveEmpty(s);
     }
@@ -897,16 +994,15 @@ export function doorstep(player: Player): NodeId[] {
 }
 
 /**
- * The victory check, run at the end of each player's own turn. "Occupies all
- * locations adjacent to the enemy staging area for 2 turns. If any of the
- * locations are relieved by the opponent, the counter is reset."
+ * One player's siege, scored for one round. "Occupies all locations adjacent to
+ * the enemy staging area for 2 turns. If any of the locations are relieved by
+ * the opponent, the counter is reset."
  *
- * Measured only for the player who just moved, and only on their own turns: the
- * count is consecutive *own* turns, so it advances once per round for whoever is
- * besieging, and snaps back to zero the instant they no longer hold the whole
- * ring.
+ * The manual's "2 turns" is read as two *rounds* — see `endOfRound` for why the
+ * distinction decides games. Holding the whole ring at the moment of scoring
+ * advances the count; anything less snaps it back to zero.
  */
-function checkVictory(s: StrategicState, player: Player): void {
+function scoreSiege(s: StrategicState, player: Player): void {
   const ring = doorstep(otherPlayer(player));
   const holdsAll = ring.length > 0 && ring.every((n) => occupies(s, n, player));
   if (!holdsAll) {
@@ -925,33 +1021,144 @@ function checkVictory(s: StrategicState, player: Player): void {
   log(
     s,
     'turn',
-    `${playerLabel(player)} holds the enemy doorstep (${s.hold[player]}/${HOLD_TO_WIN}).`,
+    `${playerLabel(player)} holds the enemy doorstep (${s.hold[player]}/${HOLD_TO_WIN} rounds).`,
   );
 }
 
-function passTurn(s: StrategicState, rng: Rng): void {
-  enforceSupply(s, s.turn);
-  checkVictory(s, s.turn);
-  if (s.winner) return;
+/**
+ * Everything that belongs to the board rather than to one player, settled once
+ * both sides have moved and before the next initiative is rolled.
+ *
+ * The victory count lives here for a reason worth stating. Turn order is not an
+ * alternation — initiative is re-rolled every round — so a besieger who moves
+ * last in one round and first in the next takes two turns back to back. Counting
+ * *own turns* let that pair tick the counter twice with the defender never having
+ * moved in between, which won games against opponents who were given no chance
+ * to relieve the ring at all, and made the manual's "if any of the locations are
+ * relieved by the opponent, the counter is reset" unreachable. Counting rounds
+ * makes the promise structural: a round always contains one turn each.
+ *
+ * Evaluated for both players in a fixed order, so a double siege resolves the
+ * same way whoever is asking.
+ */
+function endOfRound(s: StrategicState): void {
+  for (const p of PLAYERS) {
+    if (s.winner) return; // first to the mark takes it
+    scoreSiege(s, p);
+  }
+}
+
+/**
+ * Overrun enemy stragglers that `player`'s armies are already standing over.
+ *
+ * `overrun` catches units when an army *moves in*, which leaves a gap the manual
+ * does not address: a battle can leave the loser's disorganized units sitting in
+ * a node the winner now holds, and no further move ever happens there to sweep
+ * them up. This runs the same rule for ground already held, at the start of
+ * `player`'s turn.
+ *
+ * Doing it at turn start is what makes it fair rather than punitive: the losing
+ * side always gets a turn of their own in between — to walk the stragglers out,
+ * or to march a fresh army in to cover them, since an army in the node stops the
+ * overrun exactly as it stops the moving-in kind. Whether that rescue comes in
+ * time is then a question of initiative, which is the same currency everything
+ * else on this map is settled in.
+ */
+function standingOverrun(s: StrategicState, player: Player): void {
+  for (const n of MAP.nodes) {
+    if (isSea(n.id) || isStaging(n.id)) continue;
+    if (armiesAt(s, n.id, player).length === 0) continue;
+    overrun(s, n.id, player);
+  }
+}
+
+/** Does `player` still have a scout on the board to spend a recon phase on? */
+function hasRecon(s: StrategicState, player: Player): boolean {
+  return Object.values(s.units).some((u) => u.owner === player && isRecon(u));
+}
+
+/**
+ * Open the current player's turn at its first live phase. A player with no
+ * scouts left has nothing a recon phase could do, so they start straight into
+ * the strategic phase rather than being made to pass an empty budget.
+ */
+function openTurn(s: StrategicState): void {
+  // Before anything else: stragglers your armies have been standing over all
+  // round have run out of time to escape.
+  standingOverrun(s, s.turn);
+  const recon = hasRecon(s, s.turn);
+  s.phase = recon ? 'recon' : 'strategic';
+  s.actionsLeft = recon ? RECON_ACTIONS : ACTIONS_PER_TURN;
+}
+
+/**
+ * Charge one action for the current phase.
+ *
+ * A spent recon budget rolls straight on: there is nothing left to decide once
+ * the scouts are done. A spent *strategic* budget does not end the turn, and
+ * that difference is deliberate. The manual's turn is Recon → Strategic →
+ * Battle → Supply, so two things still have to be possible after the last
+ * action: opening a battle (which costs no action, and is usually the whole
+ * point of the move that just used the last one), and the supply check, which
+ * must not disorganize anyone until the player has finished arranging them.
+ * Both hang off `endTurn`, so the turn ends when the player ends it.
+ */
+function spend(s: StrategicState): void {
+  s.actionsLeft--;
+  if (s.actionsLeft === 0 && s.phase === 'recon') toStrategic(s);
+}
+
+/** Recon phase over — the same player now gets their strategic actions. */
+function toStrategic(s: StrategicState): void {
+  s.phase = 'strategic';
   s.actionsLeft = ACTIONS_PER_TURN;
+  log(s, 'turn', `${playerLabel(s.turn)} — strategic phase, ${ACTIONS_PER_TURN} actions.`);
+}
+
+function passTurn(s: StrategicState, rng: Rng): void {
+  // Supply is the player's own housekeeping — "the final action the players
+  // should do during their turn" — so it stays on the turn, not the round.
+  enforceSupply(s, s.turn);
   // A round is over once the player who moved second is done — i.e. when the one
   // just finishing is not the round's first mover. Then initiative is re-rolled,
   // and the fresh dice go to the log so the hand-off never looks arbitrary.
   if (s.turn === s.firstPlayer) {
     // First mover done; hand off to the other for the back half of the round.
     s.turn = otherPlayer(s.turn);
-    log(s, 'turn', `Round ${s.round} — ${playerLabel(s.turn)} has ${s.actionsLeft} actions.`);
+    openTurn(s);
+    log(
+      s,
+      'turn',
+      `Round ${s.round} — ${playerLabel(s.turn)} has ${s.actionsLeft} ${s.phase} actions.`,
+    );
     return;
   }
+  // Both players have now moved. Settle the board's own business before the
+  // next initiative is rolled.
+  endOfRound(s);
+  if (s.winner) return;
   s.round++;
   const roll = rollInitiative(rng);
   s.firstPlayer = roll.winner;
   s.turn = roll.winner;
+  openTurn(s);
   log(
     s,
     'turn',
-    `Round ${s.round} — ${playerLabel(s.turn)} wins initiative ${roll.win}–${roll.lose} and has ${s.actionsLeft} actions.`,
+    `Round ${s.round} — ${playerLabel(s.turn)} wins initiative ${roll.win}–${roll.lose} and has ${s.actionsLeft} ${s.phase} actions.`,
   );
+}
+
+/**
+ * Skip the rest of the recon phase. Not the same as ending the turn: the player
+ * keeps their strategic actions, they are just done scouting.
+ */
+export function endRecon(state: StrategicState): Transition {
+  const stop = frozen(state, 'recon');
+  if (stop) return { state, error: stop };
+  const s = clone(state);
+  toStrategic(s);
+  return { state: s };
 }
 
 /** End the current player's turn without spending the remaining actions. */
@@ -960,5 +1167,89 @@ export function endTurn(state: StrategicState, rng: Rng = defaultRng): Transitio
   if (state.pendingRetreat) return { state, error: 'A retreat is pending.' };
   const s = clone(state);
   passTurn(s, rng);
+  return { state: s };
+}
+
+/** Reveal up to `n` still-hidden units of `us`, returning the ids newly flipped. */
+function revealSome(us: MapUnit[], n: number): string[] {
+  const flipped: string[] = [];
+  for (const u of us) {
+    if (flipped.length >= n) break;
+    if (u.revealed) continue; // already known — don't waste the reveal on it
+    u.revealed = true;
+    flipped.push(u.id);
+  }
+  return flipped;
+}
+
+/**
+ * A recon attempt: one scout rolls a d6 against a chosen enemy army sharing its
+ * node, and the result reveals some of the enemy — or gets the scout killed.
+ *
+ *   1 destroyed · 2 nothing · 3 one unit · 4 two units · 5 the whole army ·
+ *   6 every enemy fighting unit in the location.
+ *
+ * Revealing only ever sets `revealed`; it never moves or removes an enemy unit
+ * (roll 1 is the sole deletion, and it deletes the scout, not the enemy). Recon
+ * units are never revealed by recon — they are never in an army. Roll 6 is read
+ * as "you see everything here", so it flips every enemy fighting unit in the node,
+ * armies and loose alike, not literally only army members.
+ *
+ * An attempt costs one recon-phase action — the same budget a scout's movement
+ * draws on, so two attempts, two moves, or one of each fill a turn's scouting.
+ * Returns the post-roll state and narrates the outcome to the log.
+ */
+export function reconAttempt(
+  state: StrategicState,
+  reconId: string,
+  targetArmyId: string,
+  rng: Rng = defaultRng,
+): Transition {
+  const stop = frozen(state, 'recon');
+  if (stop) return { state, error: stop };
+  if (state.actionsLeft <= 0) return { state, error: 'No recon actions left this turn.' };
+  const scout = state.units[reconId];
+  if (!scout) return { state, error: 'Unknown unit.' };
+  if (scout.owner !== state.turn) return { state, error: 'Not your recon unit.' };
+  if (!isRecon(scout)) return { state, error: 'Only recon units can scout.' };
+
+  const enemy = otherPlayer(state.turn);
+  const army = state.armies[targetArmyId];
+  if (!army || army.owner !== enemy) return { state, error: 'No enemy army to recon there.' };
+  const node = scout.nodeId;
+  if (armyNode(state, targetArmyId) !== node) {
+    return { state, error: "That army is not in your scout's location." };
+  }
+
+  const s = clone(state);
+  const roll = rollD6(rng);
+  const who = playerLabel(state.turn);
+
+  if (roll === 1) {
+    delete s.units[reconId];
+    log(s, 'info', `Recon at ${node} — ${who} rolled 1: the scout is lost.`);
+    spend(s);
+    return { state: s };
+  }
+  if (roll === 2) {
+    log(s, 'info', `Recon at ${node} — ${who} rolled 2: no results.`);
+    spend(s);
+    return { state: s };
+  }
+
+  const targets =
+    roll === 6
+      ? unitsAtFor(s, node, enemy).filter((u) => !isRecon(u))
+      : armyUnits(s, targetArmyId);
+  const cap = roll === 3 ? 1 : roll === 4 ? 2 : targets.length; // 5 and 6: all of `targets`
+  const flipped = revealSome(targets, cap);
+  log(
+    s,
+    'info',
+    `Recon at ${node} — ${who} rolled ${roll}: ${flipped.length} enemy unit${
+      flipped.length === 1 ? '' : 's'
+    } revealed.`,
+  );
+  spend(s);
   return { state: s };
 }

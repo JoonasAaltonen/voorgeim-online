@@ -12,6 +12,7 @@ import {
   withdraw,
   indirectFire,
   stalemateLooms,
+  type BattleState,
   type Transition,
 } from './battle';
 import type { BattleUnit } from './types';
@@ -329,6 +330,55 @@ describe('battle flow', () => {
     expect(t.error).toBeUndefined();
     expect(t.state.phase).toBe('battle');
     expect(t.state.winner).toBeNull();
+  });
+
+  // Reported from play: the attacker held one unit forward and one in the back
+  // row. The defender killed the forward one, which made the attacker "fully
+  // withdrawn" without the attacker having chosen anything — and the battle was
+  // called off on the spot. Breaking off is something the attacker *does*.
+  it('does not call a stalemate when the defender shoots the attacker back', () => {
+    const sc = emptyScenario();
+    sc.attacker = 'p1';
+    sc.sides.p1.roster = { infantry: 2 };
+    sc.sides.p2.roster = { artillery: 1 };
+    let t: Transition = { state: createBattle(sc) };
+    // p1 takes the front row *and* the back row; p2 faces the forward one.
+    t = deployUnit(t.state, 'p1-infantry-1', 'bottom-r0-c0');
+    t = passDeploy(t.state);
+    t = deployUnit(t.state, 'p2-artillery-1', 'top-r0-c0');
+    t = passDeploy(t.state); // → row 1
+    t = passDeploy(t.state);
+    t = passDeploy(t.state); // → row 2
+    t = deployUnit(t.state, 'p1-infantry-2', 'bottom-r2-c0');
+    t = passDeploy(t.state);
+    t = passDeploy(t.state); // → battle
+    expect(t.state.phase).toBe('battle');
+
+    // p1 shuffles the back unit and ends their turn with a unit still forward:
+    // plainly not a withdrawal.
+    t = move(t.state, 'p1-infantry-2', 'bottom-r2-c1');
+    expect(t.state.attackerBrokeOff).toBe(false);
+
+    // p2 kills the forward unit, leaving p1 entirely in the back row — by p2's
+    // doing, not p1's.
+    const shot: BattleState = structuredClone(t.state);
+    shot.units['p1-infantry-1'] = {
+      ...shot.units['p1-infantry-1'],
+      status: 'dead',
+      cellId: undefined,
+    };
+    t = move(shot, 'p2-artillery-1', 'top-r0-c1'); // p2 ends their turn
+
+    expect(t.state.phase).toBe('battle'); // the battle goes on
+    expect(t.state.winner).toBeNull();
+    expect(t.state.turn).toBe('p1'); // and p1 gets their turn back
+
+    // Now p1 chooses to stay in the back row — that *is* breaking off.
+    t = move(t.state, 'p1-infantry-2', 'bottom-r2-c2');
+    expect(t.state.attackerBrokeOff).toBe(true);
+    expect(stalemateLooms(t.state)).toBe(true); // p2's turn to contest
+    t = move(t.state, 'p2-artillery-1', 'top-r0-c2'); // they do not
+    expect(t.state.winner).toBe('stalemate');
   });
 
   it('an attacker still holding the support unit has not disengaged', () => {

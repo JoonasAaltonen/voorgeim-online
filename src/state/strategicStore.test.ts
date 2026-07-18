@@ -23,6 +23,9 @@ beforeEach(() => {
   });
   useStrategicStore.setState({ sel: null, inspectedNode: STAGING_NODE.p1, reorgNode: null });
   useSession.getState().dispatch({ t: 'stratReset' });
+  // A game opens on the recon phase; these tests are all about strategic play,
+  // so step past it. The recon phase's own store wiring is tested separately.
+  useSession.getState().dispatch({ t: 'stratEndRecon' });
 });
 afterEach(() => vi.restoreAllMocks());
 

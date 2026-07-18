@@ -26,10 +26,11 @@ import {
   canFreeReorg,
   canReorganize,
   controlFor,
-  createStrategic,
+  createStrategic as newGame,
   dismissFreeReorg,
   doorstep,
-  endTurn,
+  endRecon,
+  endTurn as handOver,
   fortsAt,
   freeReorganize,
   legalArmyTargets,
@@ -38,6 +39,8 @@ import {
   moveArmy,
   moveLoose,
   reconAt,
+  RECON_ACTIONS,
+  reconAttempt,
   reorganize,
   sideOf,
   splitUnits,
@@ -49,7 +52,7 @@ import {
   type StrategicState,
   type Transition,
 } from './strategic';
-import type { Player } from './types';
+import { playerLabel, type Player } from './types';
 import { STARTING_ARMY } from './units';
 
 // The map is real data, so tests pick nodes by the property under test rather
@@ -92,6 +95,20 @@ beforeEach(() => {
   });
 });
 afterEach(() => vi.restoreAllMocks());
+
+/**
+ * Almost every test below is about the strategic phase, so the default opening
+ * skips straight past the recon phase. The recon suites call `newGame()` instead
+ * when the recon phase is the thing under test.
+ */
+const createStrategic = (rng?: Parameters<typeof newGame>[0]): StrategicState =>
+  endRecon(newGame(rng)).state;
+
+/** Likewise: hand the turn over and drop the next player straight into strategy. */
+const endTurn = (...args: Parameters<typeof handOver>): Transition => {
+  const t = handOver(...args);
+  return t.error || t.state.phase !== 'recon' ? t : endRecon(t.state);
+};
 
 const isPlain = (id: NodeId) => !isSea(id) && !NODE_BY_ID[id].staging;
 
@@ -231,7 +248,7 @@ describe('recon', () => {
   // "Recon units can move between the locations and behind enemy lines without
   // initiating battles."
   it('walks onto an enemy army, where a fighting unit may not', () => {
-    const s = createStrategic();
+    const s = newGame(); // scouts move on the recon phase's budget
     placeArmy(s, 'p2', inland.id, 2);
     const from = inland.adjacency[0];
     const scout = reconOf(s, 'p1')[0];
@@ -269,7 +286,7 @@ describe('recon', () => {
   });
 
   it('moves on its own, taking no one with it', () => {
-    const s = createStrategic();
+    const s = newGame(); // scouts move on the recon phase's budget
     const scout = reconOf(s, 'p1')[0];
     const mate = looseAt(s, STAGING_NODE.p1, 'p1')[0];
     const to = NODE_BY_ID[STAGING_NODE.p1].adjacency[0];
@@ -445,17 +462,24 @@ describe('strategic movement', () => {
     expect(moveLoose(s, [mine.id], inland.id).error).toMatch(/enemy army/i);
   });
 
-  it('hands over after two actions and stops accepting a third', () => {
+  // Spending the budget does *not* hand over. The turn is Recon → Strategic →
+  // Battle → Supply, so the player still has to be able to open a battle with
+  // the army they just moved, and the supply check must wait until they say
+  // they are done arranging. The turn ends when they end it.
+  it('stops accepting actions after two, but holds the turn open', () => {
     let t: Transition = { state: createStrategic() };
     const [a, b] = looseAt(t.state, STAGING_NODE.p1, 'p1');
     t = moveLoose(t.state, [a.id], NODE_BY_ID[a.nodeId].adjacency[0]);
     t = moveLoose(t.state, [b.id], NODE_BY_ID[b.nodeId].adjacency[0]);
-    expect(t.state.turn).toBe('p2');
-    expect(t.state.actionsLeft).toBe(ACTIONS_PER_TURN);
+    expect(t.state.turn).toBe('p1');
+    expect(t.state.actionsLeft).toBe(0);
 
     const c = looseAt(t.state, STAGING_NODE.p1, 'p1')[0];
     const denied = moveLoose(t.state, [c.id], NODE_BY_ID[c.nodeId].adjacency[0]);
-    expect(denied.error).toMatch(/P2 - Green's turn/);
+    expect(denied.error).toMatch(/no actions left/i);
+
+    // And it is `endTurn` that finally hands over.
+    expect(endTurn(t.state).state.turn).toBe('p2');
   });
 
   it('counts a round only when play returns to p1', () => {
@@ -579,6 +603,7 @@ describe('asymmetric node sides', () => {
   function enter(s: StrategicState, player: Player, from: NodeId, n = 1): string {
     const a = placeArmy(s, player, from, n);
     s.turn = player;
+    s.phase = 'strategic';
     s.actionsLeft = ACTIONS_PER_TURN;
     const t = moveArmy(s, a, 'n01');
     expect(t.error).toBeUndefined();
@@ -741,7 +766,7 @@ describe('victory', () => {
     expect(doorstep('p2').length).toBeGreaterThan(0);
   });
 
-  it('is won by holding the whole enemy doorstep for the required own turns', () => {
+  it('is won by holding the whole enemy doorstep for the required rounds', () => {
     const s = createStrategic();
     for (const n of doorstep('p2')) place(s, 'p1', n, 1);
     let t: Transition = { state: s };
@@ -752,18 +777,65 @@ describe('victory', () => {
     expect(t.state.winner).toBe('p1');
   });
 
+  // Reported from play: p1 moved second in one round and first in the next, so
+  // an own-turn counter ticked twice with p2 never having moved in between — p2
+  // lost without the chance to relieve the ring that the rules promise. Scoring
+  // at the round boundary makes that structural: a round is always one turn each.
+  it('does not tick twice when the besieger takes back-to-back turns', () => {
+    const s = createStrategic();
+    for (const n of doorstep('p2')) place(s, 'p1', n, 1);
+    // p2 opens the round, so p1 closes it — and p1 also opens the next one.
+    s.firstPlayer = 'p2';
+    s.turn = 'p2';
+    const p1wins = seqRng(0.99, 0); // p1 takes every following initiative
+
+    const afterP2 = endTurn(s, p1wins).state; // p2 moves, ignoring the siege
+    expect(afterP2.turn).toBe('p1');
+    expect(afterP2.hold.p1).toBe(0); // nothing scored mid-round
+
+    const round1 = endTurn(afterP2, p1wins).state; // p1 closes the round
+    expect(round1.hold.p1).toBe(1);
+    expect(round1.turn).toBe('p1'); // p1 won initiative and opens the next round
+
+    // p1's back-to-back turn. The round is not over — p2 has not moved in it —
+    // so nothing is scored and nothing is won.
+    const backToBack = endTurn(round1, p1wins).state;
+    expect(backToBack.hold.p1).toBe(1);
+    expect(backToBack.winner).toBeNull();
+    expect(backToBack.turn).toBe('p2'); // p2 gets the turn they were denied
+
+    // p2 has their chance and does not take it; the round closes and p1 wins.
+    expect(endTurn(backToBack, p1wins).state.winner).toBe('p1');
+  });
+
+  it('lets the defender break the ring on the turn that decides it', () => {
+    const s = createStrategic();
+    const held = doorstep('p2').map((n) => place(s, 'p1', n, 1)[0]);
+    s.firstPlayer = 'p1';
+    s.turn = 'p1';
+    const t1 = endTurn(s).state; // p1 opens, p2 to move
+    const round1 = endTurn(t1).state; // round closes: p1 holds
+    expect(round1.hold.p1).toBe(1);
+
+    // Next round: p1 moves, then p2 relieves one node before the round is scored.
+    const mid = endTurn(round1).state;
+    mid.units[held[0].id].nodeId = STAGING_NODE.p1; // p2 retakes it
+    const round2 = endTurn(mid).state;
+    expect(round2.winner).toBeNull();
+    expect(round2.hold.p1).toBe(0);
+  });
+
   it('resets the count the moment the doorstep is relieved', () => {
     const s = createStrategic();
     const held = doorstep('p2').map((n) => place(s, 'p1', n, 1)[0]);
-    const t1 = endTurn(s).state; // p1 turn ends holding all → count 1
-    expect(t1.hold.p1).toBe(1);
-    // p1 abandons one doorstep node — mutate the forwarded state, since endTurn
-    // clones and the original `s` units are no longer the ones in play.
-    t1.units[held[0].id].nodeId = STAGING_NODE.p1;
-    const t2 = endTurn(t1).state; // p2's turn
-    const t3 = endTurn(t2).state; // p1's turn ends, no longer holding
-    expect(t3.hold.p1).toBe(0);
-    expect(t3.winner).toBeNull();
+    const t1 = endTurn(s).state; // p1's turn — mid-round, nothing scored yet
+    const t2 = endTurn(t1).state; // round closes, p1 holds all
+    expect(t2.hold.p1).toBe(1);
+    t2.units[held[0].id].nodeId = STAGING_NODE.p1; // p1 abandons a node
+    const t3 = endTurn(t2).state;
+    const t4 = endTurn(t3).state; // next round closes
+    expect(t4.hold.p1).toBe(0);
+    expect(t4.winner).toBeNull();
   });
 });
 
@@ -803,7 +875,7 @@ describe('a decided or interrupted game freezes', () => {
   it('refuses actions while a retreat is pending', () => {
     const s = createStrategic();
     const a = placeArmy(s, 'p1', inland.id, 2);
-    s.pendingRetreat = { player: 'p2', from: inland.id, options: [NODE_BY_ID[inland.id].adjacency[0]] };
+    s.pendingRetreat = { player: 'p2', from: inland.id, options: [NODE_BY_ID[inland.id].adjacency[0]], units: [] };
     expect(moveArmy(s, a, NODE_BY_ID[inland.id].adjacency[0]).error).toMatch(/must retreat/i);
   });
 });
@@ -873,5 +945,232 @@ describe("the winner's free post-battle reshuffle", () => {
     const dest = NODE_BY_ID[inland.id].adjacency.find(isPlain)!;
     const t = moveArmy(s, b, dest);
     expect(t.state.freeReorgs[inland.id]).toBeUndefined();
+  });
+});
+
+describe('recon attempt', () => {
+  // A constant rng that forces `rollD6` to land on `face`: rollD6 is
+  // floor(rng()*6)+1, so the midpoint of the face's sixth lands cleanly on it.
+  const d6 = (face: number) => () => (face - 0.5) / 6;
+  const scoutOf = (s: StrategicState, p: Player) =>
+    Object.values(s.units).find((u) => u.owner === p && u.type === 'recon')!;
+  const revealedIn = (s: StrategicState, armyId: string) =>
+    armyUnits(s, armyId).filter((u) => u.revealed);
+
+  /** p1 scout and a p2 army of `n`, both standing in `inland`. Returns their ids. */
+  function scene(n: number) {
+    const s = newGame(); // recon happens in the recon phase, so don't skip it
+    const scout = scoutOf(s, 'p1');
+    s.units[scout.id].nodeId = inland.id;
+    const army = placeArmy(s, 'p2', inland.id, n);
+    return { s, scoutId: scout.id, army };
+  }
+
+  it('destroys the scout and reveals nothing on a 1', () => {
+    const { s, scoutId, army } = scene(3);
+    const t = reconAttempt(s, scoutId, army, d6(1));
+    expect(t.state.units[scoutId]).toBeUndefined();
+    expect(revealedIn(t.state, army)).toHaveLength(0);
+  });
+
+  it('reveals nothing but keeps the scout on a 2', () => {
+    const { s, scoutId, army } = scene(3);
+    const t = reconAttempt(s, scoutId, army, d6(2));
+    expect(t.state.units[scoutId]).toBeDefined();
+    expect(revealedIn(t.state, army)).toHaveLength(0);
+  });
+
+  it('reveals one unit on a 3, two on a 4', () => {
+    const three = scene(3);
+    expect(revealedIn(reconAttempt(three.s, three.scoutId, three.army, d6(3)).state, three.army))
+      .toHaveLength(1);
+    const four = scene(3);
+    expect(revealedIn(reconAttempt(four.s, four.scoutId, four.army, d6(4)).state, four.army))
+      .toHaveLength(2);
+  });
+
+  it('reveals the whole selected army on a 5', () => {
+    const { s, scoutId, army } = scene(4);
+    const t = reconAttempt(s, scoutId, army, d6(5));
+    expect(revealedIn(t.state, army)).toHaveLength(4);
+  });
+
+  it('reveals every enemy fighting unit in the location on a 6, but not recon', () => {
+    const { s, scoutId, army } = scene(2);
+    const other = placeArmy(s, 'p2', inland.id, 2); // a second enemy army in the node
+    const loose = place(s, 'p2', inland.id, 1)[0]; // a disorganized enemy unit
+    const enemyScout = scoutOf(s, 'p2');
+    s.units[enemyScout.id].nodeId = inland.id;
+    const t = reconAttempt(s, scoutId, army, d6(6));
+    expect(revealedIn(t.state, army)).toHaveLength(2);
+    expect(revealedIn(t.state, other)).toHaveLength(2);
+    expect(t.state.units[loose.id].revealed).toBe(true);
+    expect(t.state.units[enemyScout.id].revealed).toBeFalsy(); // recon is never revealed
+  });
+
+  it('does not re-reveal an already-known unit — a partial reveal flips a hidden one', () => {
+    const { s, scoutId, army } = scene(3);
+    const known = armyUnits(s, army)[0];
+    s.units[known.id].revealed = true;
+    const t = reconAttempt(s, scoutId, army, d6(3)); // reveal 1
+    expect(revealedIn(t.state, army)).toHaveLength(2); // the known one plus one freshly flipped
+    expect(t.state.units[known.id].revealed).toBe(true);
+  });
+
+  it('leaves the caller state untouched (returns a clone)', () => {
+    const { s, scoutId, army } = scene(3);
+    reconAttempt(s, scoutId, army, d6(5));
+    expect(revealedIn(s, army)).toHaveLength(0);
+  });
+
+  it("rejects scouting with an enemy's recon unit", () => {
+    const { s, army } = scene(3);
+    const enemyScout = scoutOf(s, 'p2');
+    const t = reconAttempt(s, enemyScout.id, army, d6(5));
+    expect(t.error).toMatch(/your recon unit/i);
+  });
+
+  it('rejects a fighting unit posing as a scout', () => {
+    const { s, army } = scene(3);
+    const grunt = place(s, 'p1', inland.id, 1)[0];
+    const t = reconAttempt(s, grunt.id, army, d6(5));
+    expect(t.error).toMatch(/recon units can scout/i);
+  });
+
+  it('rejects an army that is not in the scout’s node', () => {
+    const { s, scoutId } = scene(3);
+    const elsewhere = placeArmy(s, 'p2', inland.adjacency.find(isPlain)!, 2);
+    const t = reconAttempt(s, scoutId, elsewhere, d6(5));
+    expect(t.error).toBeDefined();
+  });
+
+  it('rejects targeting a friendly army', () => {
+    const { s, scoutId } = scene(3);
+    const mine = placeArmy(s, 'p1', inland.id, 2);
+    const t = reconAttempt(s, scoutId, mine, d6(5));
+    expect(t.error).toMatch(/no enemy army/i);
+  });
+});
+
+// The manual runs a turn as Recon → Strategic. The two budgets are separate, so
+// scouting never costs an army move and vice versa.
+describe('the recon phase', () => {
+  const scoutOf = (s: StrategicState, p: Player) =>
+    Object.values(s.units).find((u) => u.owner === p && u.type === 'recon')!;
+  const strip = (s: StrategicState, p: Player) => {
+    for (const u of Object.values(s.units)) {
+      if (u.owner === p && u.type === 'recon') delete s.units[u.id];
+    }
+  };
+
+  it('opens the game, with its own budget', () => {
+    const s = newGame();
+    expect(s.phase).toBe('recon');
+    expect(s.actionsLeft).toBe(RECON_ACTIONS);
+  });
+
+  it('holds strategic actions back until it is over', () => {
+    const s = newGame();
+    const grunt = looseAt(s, STAGING_NODE.p1, 'p1')[0];
+    const to = NODE_BY_ID[STAGING_NODE.p1].adjacency[0];
+    expect(moveLoose(s, [grunt.id], to).error).toMatch(/recon phase is not over/i);
+    expect(legalLooseTargets(s, grunt.id)).toEqual([]);
+  });
+
+  it('hands the same player their strategic actions when skipped', () => {
+    const s = newGame();
+    const t = endRecon(s);
+    expect(t.error).toBeUndefined();
+    expect(t.state.turn).toBe('p1'); // still p1's turn — only the phase moved on
+    expect(t.state.phase).toBe('strategic');
+    expect(t.state.actionsLeft).toBe(ACTIONS_PER_TURN);
+  });
+
+  it('rolls into the strategic phase once its budget runs out, not into the opponent', () => {
+    const s = newGame();
+    const scout = scoutOf(s, 'p1');
+    const a = NODE_BY_ID[STAGING_NODE.p1].adjacency[0];
+    const t1 = moveLoose(s, [scout.id], a).state;
+    expect(t1.phase).toBe('recon');
+    expect(t1.actionsLeft).toBe(RECON_ACTIONS - 1);
+
+    const t2 = moveLoose(t1, [scout.id], STAGING_NODE.p1).state;
+    expect(t2.turn).toBe('p1');
+    expect(t2.phase).toBe('strategic');
+    expect(t2.actionsLeft).toBe(ACTIONS_PER_TURN);
+  });
+
+  it('spends the same budget on an attempt as on a move', () => {
+    const s = newGame();
+    const scout = scoutOf(s, 'p1');
+    s.units[scout.id].nodeId = inland.id;
+    const army = placeArmy(s, 'p2', inland.id, 2);
+    const t = reconAttempt(s, scout.id, army, () => 0.5); // a 4, so the scout lives
+    expect(t.error).toBeUndefined();
+    expect(t.state.phase).toBe('recon');
+    expect(t.state.actionsLeft).toBe(RECON_ACTIONS - 1);
+  });
+
+  it('is skipped by a player with no scouts left', () => {
+    const s = newGame();
+    strip(s, 'p2');
+    const t = handOver(endRecon(s).state); // p1 skips their recon, then ends the turn
+    expect(t.state.turn).toBe('p2');
+    expect(t.state.phase).toBe('strategic');
+    expect(t.state.actionsLeft).toBe(ACTIONS_PER_TURN);
+  });
+
+  it('keeps scouts out of the strategic phase, and refuses a second skip', () => {
+    const s = endRecon(newGame()).state;
+    const scout = scoutOf(s, 'p1');
+    const to = NODE_BY_ID[STAGING_NODE.p1].adjacency[0];
+    expect(moveLoose(s, [scout.id], to).error).toMatch(/recon phase is over/i);
+    expect(legalLooseTargets(s, scout.id)).toEqual([]);
+    expect(endRecon(s).error).toMatch(/recon phase is over/i);
+  });
+});
+
+// The log is a single shared list, broadcast to both seats — `maskFor` fogs the
+// board but not the narration. So no log line may name a unit type, or moving a
+// face-down chip would announce what it is. The one exception is the overrun,
+// which names units as it removes them from the board.
+describe('the shared log keeps the fog', () => {
+  const TYPES = ['infantry', 'artillery', 'anti-tank', 'armor', 'recon'];
+  const namesAType = (text: string) => TYPES.some((t) => text.toLowerCase().includes(t));
+
+  it('never names a unit type when a disorganized unit moves', () => {
+    const s = createStrategic();
+    const [a, b] = looseAt(s, STAGING_NODE.p1, 'p1');
+    const to = NODE_BY_ID[STAGING_NODE.p1].adjacency[0];
+    for (const ids of [[a.id], [a.id, b.id]]) {
+      const t = moveLoose(createStrategic(), ids, to);
+      expect(t.error).toBeUndefined();
+      const line = t.state.log[t.state.log.length - 1].text;
+      expect(namesAType(line)).toBe(false);
+      expect(line).toContain(to);
+    }
+  });
+
+  it('never names a unit type when a scout moves', () => {
+    const s = newGame(); // scouts move in the recon phase
+    const scout = Object.values(s.units).find((u) => u.owner === 'p1' && u.type === 'recon')!;
+    const to = NODE_BY_ID[STAGING_NODE.p1].adjacency[0];
+    const t = moveLoose(s, [scout.id], to);
+    expect(t.error).toBeUndefined();
+    // "a recon unit" is the one allowed use of the word: scouts are never fogged.
+    expect(t.state.log[t.state.log.length - 1].text).toBe(
+      `${playerLabel('p1')} a recon unit moves ${STAGING_NODE.p1} → ${to}.`,
+    );
+  });
+
+  it('never names a unit type when supply disorganizes one', () => {
+    const s = createStrategic();
+    // Overfill a contested node so the end-of-turn check has to shed units.
+    placeArmy(s, 'p1', inland.id, slotsFor(inland.id, 'p1') * 6);
+    place(s, 'p2', inland.adjacency[0], 1);
+    const t = endTurn(s).state;
+    const shed = t.log.filter((l) => l.text.includes('out of supply'));
+    expect(shed.length).toBeGreaterThan(0);
+    for (const l of shed) expect(namesAType(l.text)).toBe(false);
   });
 });

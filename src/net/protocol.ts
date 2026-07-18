@@ -14,8 +14,29 @@ import type { Player } from '../engine/types';
  * 2 — Phase 7: strategic state gained forts, initiative, victory, retreat, and
  * the free post-battle reshuffle. A Phase-5 room restored into this code is
  * missing those fields and crashes the client, so old rooms must be dropped.
+ *
+ * 3 — Phase 6: the turn gained a recon phase, so strategic state carries a
+ * `phase`. A v2 room restored here has none, which reads as "not the strategic
+ * phase" and deadlocks the board — every army move refused, and no recon phase
+ * on screen to end. Drop those rooms too.
+ *
+ * 4 — Phase 6 fog: a broadcast unit's `type` may now be `MASKED`. The stored
+ * room is unchanged (masking happens on the way out, not in storage), but a v3
+ * client would run `isMapOnly('unknown')` against a stats table with no such
+ * entry and crash, so it must be told to reload.
+ *
+ * 5 — `PendingRetreat` gained `units`, the named force that falls back. A v4
+ * room stored mid-retreat has no such list, and would fall back with nobody.
+ *
+ * 6 — `BattleState` gained `attackerBrokeOff`. A v5 battle restored here reads
+ * it as `undefined`, which is falsy, so a genuine disengagement would never
+ * settle into a stalemate and the battle could not end.
+ *
+ * 7 — the siege counter is scored per *round* rather than per own-turn, so a
+ * stored `hold` means something different. Restoring a v6 room would carry a
+ * turn-count forward as a round-count and decide the game early.
  */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 7;
 
 /** Room codes are 6 chars from an alphabet with no 0/O or 1/I to mis-read aloud. */
 export const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';

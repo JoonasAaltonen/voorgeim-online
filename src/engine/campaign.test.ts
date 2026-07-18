@@ -5,13 +5,37 @@
 // the translation — which units come across, and what the map looks like after.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NODE_BY_ID, STAGING_NODE, type NodeId } from './map';
+import { MAP, NODE_BY_ID, STAGING_NODE, isSea, type NodeId } from './map';
 import {
-  createStrategic,
+  createStrategic as newGame,
+  endRecon,
+  endTurn as handOver,
+  armyUnits,
+  buildFort,
+  SEA_SUPPLY,
+  supplyCap,
+  supplyUsed,
   fortKey,
+  MASKED,
+  moveArmy,
+  moveLoose,
+  occupies,
   type MapUnit,
   type StrategicState,
+  type Transition,
 } from './strategic';
+
+/**
+ * Every test here is about battles, which happen in the strategic phase, so they
+ * open a game already past the recon phase rather than repeating the skip.
+ */
+const createStrategic = (): StrategicState => endRecon(newGame()).state;
+
+/** Likewise: hand the turn over and drop the next player straight into strategy. */
+const endTurn = (s: StrategicState): Transition => {
+  const t = handOver(s);
+  return t.error || t.state.phase !== 'recon' ? t : endRecon(t.state);
+};
 import {
   canInitiateBattle,
   createBattleAt,
@@ -21,8 +45,8 @@ import {
   supportGuns,
 } from './campaign';
 import { assembleBattle, type BattleState } from './battle';
-import type { BattleUnit, Player, UnitStatus } from './types';
-import { UNIT_STATS } from './units';
+import { otherPlayer, type BattleUnit, type Player, type UnitStatus } from './types';
+import { UNIT_STATS, type UnitType } from './units';
 
 // Initiative is a dice roll; pin it so setup is deterministic (p1 opens).
 beforeEach(() => {
@@ -48,6 +72,20 @@ function army(s: StrategicState, owner: Player, node: NodeId, type: MapUnit['typ
   return taken;
 }
 
+/** Same as `army`, but returning the army's id rather than its units. */
+function armyAt(s: StrategicState, owner: Player, node: NodeId, type: MapUnit['type'], n: number): string {
+  return army(s, owner, node, type, n)[0].armyId!;
+}
+
+/** Same, but left disorganized in the node — no army, as if dropped by supply. */
+function loose(s: StrategicState, owner: Player, node: NodeId, type: MapUnit['type'], n: number): MapUnit[] {
+  const taken = Object.values(s.units)
+    .filter((u) => u.owner === owner && !u.armyId && u.nodeId === STAGING_NODE[owner] && u.type === type)
+    .slice(0, n);
+  for (const u of taken) u.nodeId = node;
+  return taken;
+}
+
 /** A finished battle over `node`, with the listed units set to the given states. */
 function finished(
   s: StrategicState,
@@ -56,11 +94,17 @@ function finished(
   winner: Player | 'stalemate',
   states: Record<string, { status: UnitStatus; wounded?: boolean; support?: boolean }>,
 ): BattleState {
+  // Battles are built from real state, never a fogged view, so a masked chip
+  // cannot occur here — fall back to infantry alongside the missing-unit case.
+  const typeOf = (id: string): UnitType => {
+    const t = s.units[id]?.type;
+    return t && t !== MASKED ? t : 'infantry';
+  };
   const units: BattleUnit[] = Object.entries(states).map(([id, st]) => ({
     id,
-    type: s.units[id]?.type ?? 'infantry',
+    type: typeOf(id),
     owner: s.units[id]?.owner ?? attacker,
-    hp: UNIT_STATS[s.units[id]?.type ?? 'infantry'].hp,
+    hp: UNIT_STATS[typeOf(id)].hp,
     status: st.status,
     wounded: st.wounded,
     support: st.support,
@@ -99,6 +143,40 @@ describe('opening a battle', () => {
     expect(battle!.attacker).toBe('p1');
     expect(battle!.node).toBe(BATTLE);
     for (const u of [...mine, ...theirs]) expect(battle!.units[u.id]).toBeDefined();
+  });
+
+  // Reported from play: ten units walk into three supply, the excess drops to
+  // disorganized where it stands, and the enemy's attack dragged them in too.
+  // "[Disorganized units] will need to be organized into armies to be used in
+  // battles" — they sit it out.
+  it('leaves disorganized units out of the battle, on both sides', () => {
+    const s = createStrategic();
+    const mine = army(s, 'p1', BATTLE, 'infantry', 2);
+    const theirs = army(s, 'p2', BATTLE, 'armor', 1);
+    const myStragglers = loose(s, 'p1', BATTLE, 'artillery', 2);
+    const theirStragglers = loose(s, 'p2', BATTLE, 'infantry', 3);
+
+    const { battle } = createBattleAt(s, BATTLE, 'p2');
+    for (const u of [...mine, ...theirs]) expect(battle!.units[u.id]).toBeDefined();
+    for (const u of [...myStragglers, ...theirStragglers]) {
+      expect(battle!.units[u.id]).toBeUndefined();
+    }
+    expect(Object.keys(battle!.units)).toHaveLength(3);
+  });
+
+  it('will not open a battle over disorganized units alone — that is an overrun', () => {
+    const s = createStrategic();
+    army(s, 'p1', BATTLE, 'infantry', 2);
+    loose(s, 'p2', BATTLE, 'infantry', 3); // enemy present, but none of it organized
+    expect(canInitiateBattle(s, BATTLE, 'p1')).toBe(false);
+    expect(createBattleAt(s, BATTLE, 'p1').error).toBeDefined();
+  });
+
+  it('will not let a force of stragglers attack an army either', () => {
+    const s = createStrategic();
+    loose(s, 'p1', BATTLE, 'infantry', 4);
+    army(s, 'p2', BATTLE, 'armor', 1);
+    expect(canInitiateBattle(s, BATTLE, 'p1')).toBe(false);
   });
 
   it('leaves recon behind — scouts never fight', () => {
@@ -360,5 +438,132 @@ describe('the retreat after a loss', () => {
     ).state;
     expect(t.units[loser.id]).toBeUndefined();
     expect(t.log.at(-1)?.text).toMatch(/encircled/i);
+  });
+});
+
+// The manual does not cover what becomes of disorganized units left standing in
+// a node the enemy has just taken. The rule adopted here: they do not ride out
+// on the back of the army's defeat, and the winner's armies sweep them up at the
+// start of the winner's *next* turn — which always leaves their owner one turn
+// to walk them out or march a fresh army in to cover them.
+describe('disorganized units left behind by a defeat', () => {
+  /**
+   * Hand `p` the start of a turn, which is when standing overruns land.
+   * Priming `turn === firstPlayer` makes the hand-off the back half of a round,
+   * so no initiative is re-rolled and the test does not depend on the dice.
+   */
+  function opensTurn(s: StrategicState, p: Player): StrategicState {
+    const other = otherPlayer(p);
+    return endTurn({ ...s, turn: other, firstPlayer: other }).state;
+  }
+
+  /** p1 defends BATTLE with an army plus stragglers; p2 attacks and wins. */
+  function afterLoss() {
+    const s = createStrategic();
+    const held = army(s, 'p1', BATTLE, 'infantry', 1);
+    const stragglers = loose(s, 'p1', BATTLE, 'artillery', 2);
+    const attackers = army(s, 'p2', BATTLE, 'armor', 2);
+    const b = finished(s, BATTLE, 'p2', 'p2', {
+      [held[0].id]: { status: 'withdrawn' },
+      [attackers[0].id]: { status: 'deployed' },
+    });
+    // The withdrawn defender owes the board a destination; settle it so the
+    // turn can be handed over at all.
+    const after = resolveBattle(s, b).state;
+    const settled = after.pendingRetreat
+      ? resolveRetreat(after, after.pendingRetreat.options[0]).state
+      : after;
+    return { s: settled, stragglers, attackers };
+  }
+
+  it('leaves the stragglers where they stand rather than retreating them free', () => {
+    const { s, stragglers } = afterLoss();
+    for (const u of stragglers) expect(s.units[u.id].nodeId).toBe(BATTLE);
+  });
+
+  it('still retreats the army survivors, including those the battle turned loose', () => {
+    const s = createStrategic();
+    const [held] = army(s, 'p1', BATTLE, 'infantry', 1);
+    const [straggler] = loose(s, 'p1', BATTLE, 'artillery', 1);
+    army(s, 'p2', BATTLE, 'armor', 2);
+    const b = finished(s, BATTLE, 'p2', 'p2', { [held.id]: { status: 'withdrawn' } });
+    const t = resolveBattle(s, b).state;
+    const dest = t.pendingRetreat ? resolveRetreat(t, t.pendingRetreat.options[0]).state : t;
+    // The withdrawn defender is disorganized now, but it still falls back.
+    expect(dest.units[held.id].nodeId).not.toBe(BATTLE);
+    expect(dest.units[straggler.id].nodeId).toBe(BATTLE);
+  });
+
+  it("does not overrun on the loser's own turn — that is their chance to react", () => {
+    const { s, stragglers } = afterLoss();
+    const mine = opensTurn(s, 'p1');
+    expect(mine.turn).toBe('p1');
+    for (const u of stragglers) expect(mine.units[u.id]).toBeDefined();
+  });
+
+  it('overruns them when the winner opens a turn still standing over them', () => {
+    const { s, stragglers } = afterLoss();
+    const theirs = opensTurn(s, 'p2');
+    for (const u of stragglers) expect(theirs.units[u.id]).toBeUndefined();
+  });
+
+  it('spares the ones their owner walks out in time', () => {
+    const { s, stragglers } = afterLoss();
+    const mine = opensTurn(s, 'p1');
+    const away = NODE_BY_ID[BATTLE].adjacency.find((n) => !occupies(mine, n, 'p2'))!;
+    const moved = moveLoose(mine, [stragglers[0].id], away).state;
+    const theirs = opensTurn(moved, 'p2');
+    expect(theirs.units[stragglers[0].id]).toBeDefined(); // got out
+    expect(theirs.units[stragglers[1].id]).toBeUndefined(); // did not
+  });
+
+  // An army in the node stops this exactly as it stops the moving-in kind, so a
+  // relief force covers the retreat.
+  it('spares them all if an army marches in to cover them', () => {
+    const { s, stragglers } = afterLoss();
+    const mine = opensTurn(s, 'p1');
+    const from = NODE_BY_ID[BATTLE].adjacency.find((n) => !occupies(mine, n, 'p2'))!;
+    const relief = armyAt(mine, 'p1', from, 'infantry', 2);
+    const covered = moveArmy(mine, relief, BATTLE).state;
+    const theirs = opensTurn(covered, 'p2');
+    for (const u of stragglers) expect(theirs.units[u.id]).toBeDefined();
+  });
+});
+
+// The reason spending the last action must not end the turn: the move that uses
+// it is usually the one that creates the battle.
+describe('attacking with the last action of the turn', () => {
+  it('leaves the turn open to initiate the battle the move just created', () => {
+    const s = createStrategic();
+    const from = NODE_BY_ID[BATTLE].adjacency[0];
+    army(s, 'p2', BATTLE, 'armor', 1);
+    const mine = armyAt(s, 'p1', from, 'infantry', 2);
+
+    // Burn the first action, then walk into the enemy with the second.
+    const first = buildFort(s, from).state;
+    expect(first.actionsLeft).toBe(1);
+    const arrived = moveArmy(first, mine, BATTLE).state;
+
+    expect(arrived.actionsLeft).toBe(0);
+    expect(arrived.turn).toBe('p1'); // still theirs — the old code handed over here
+    expect(canInitiateBattle(arrived, BATTLE, 'p1')).toBe(true);
+    expect(createBattleAt(arrived, BATTLE, 'p1').error).toBeUndefined();
+  });
+
+  it('defers the supply check to the end of the turn, not the last action', () => {
+    const s = createStrategic();
+    // Sea supplies a flat 2 whatever the slots, so this is unambiguously an
+    // overstack: an army walks in far too big and must not shed until turn's end.
+    const sea = MAP.nodes.find((n) => n.sea)!.id;
+    const beach = NODE_BY_ID[sea].adjacency.find((n) => !isSea(n))!;
+    const big = armyAt(s, 'p1', beach, 'infantry', 6);
+    const moved = moveArmy(buildFort(s, beach).state, big, sea).state;
+
+    expect(moved.actionsLeft).toBe(0);
+    expect(supplyCap(moved, sea, 'p1')).toBe(SEA_SUPPLY);
+    expect(armyUnits(moved, big)).toHaveLength(6); // nobody shed yet
+
+    const ended = endTurn(moved).state;
+    expect(supplyUsed(ended, sea, 'p1')).toBeLessThanOrEqual(SEA_SUPPLY);
   });
 });

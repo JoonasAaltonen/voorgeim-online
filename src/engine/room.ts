@@ -35,10 +35,13 @@ import {
   buildFort,
   createStrategic,
   dismissFreeReorg,
+  endRecon,
   endTurn,
   freeReorganize,
+  maskFor,
   moveArmy,
   moveLoose,
+  reconAttempt,
   reorganize,
   splitUnits,
   swapSide,
@@ -103,6 +106,8 @@ type StratIntent =
   | { t: 'stratDismissFreeReorg'; nodeId: NodeId }
   | { t: 'stratBuildFort'; nodeId: NodeId }
   | { t: 'stratInitiateBattle'; nodeId: NodeId }
+  | { t: 'stratRecon'; reconId: string; targetArmyId: string }
+  | { t: 'stratEndRecon' }
   | { t: 'stratEndTurn' };
 
 /**
@@ -147,6 +152,8 @@ const STRAT_INTENTS: ReadonlySet<string> = new Set<StratIntent['t']>([
   'stratDismissFreeReorg',
   'stratBuildFort',
   'stratInitiateBattle',
+  'stratRecon',
+  'stratEndRecon',
   'stratEndTurn',
 ]);
 
@@ -279,26 +286,33 @@ export function applyIntent(
     }
     switch (intent.t) {
       case 'stratMoveArmy':
-        return liftStrat(room, moveArmy(room.strategic, intent.armyId, intent.nodeId, rng));
+        return liftStrat(room, moveArmy(room.strategic, intent.armyId, intent.nodeId));
       case 'stratMoveLoose':
-        return liftStrat(room, moveLoose(room.strategic, intent.unitIds, intent.nodeId, rng));
+        return liftStrat(room, moveLoose(room.strategic, intent.unitIds, intent.nodeId));
       case 'stratSplit':
         return liftStrat(room, splitUnits(room.strategic, intent.unitIds));
       case 'stratSwapSide':
-        return liftStrat(room, swapSide(room.strategic, intent.nodeId, rng));
+        return liftStrat(room, swapSide(room.strategic, intent.nodeId));
       case 'stratReorganize':
-        return liftStrat(room, reorganize(room.strategic, intent.nodeId, intent.assign, rng));
+        return liftStrat(room, reorganize(room.strategic, intent.nodeId, intent.assign));
       case 'stratFreeReorganize':
         return liftStrat(room, freeReorganize(room.strategic, intent.nodeId, intent.assign));
       case 'stratDismissFreeReorg':
         return liftStrat(room, dismissFreeReorg(room.strategic, intent.nodeId));
       case 'stratBuildFort':
-        return liftStrat(room, buildFort(room.strategic, intent.nodeId, rng));
+        return liftStrat(room, buildFort(room.strategic, intent.nodeId));
       case 'stratInitiateBattle': {
         const { battle, error } = createBattleAt(room.strategic, intent.nodeId, actor);
         if (error || !battle) return { state: room, error: error ?? 'Cannot start that battle.' };
         return commit(room, { ...room, battle, view: 'battle' });
       }
+      case 'stratRecon':
+        return liftStrat(
+          room,
+          reconAttempt(room.strategic, intent.reconId, intent.targetArmyId, rng),
+        );
+      case 'stratEndRecon':
+        return liftStrat(room, endRecon(room.strategic));
       case 'stratEndTurn':
         return liftStrat(room, endTurn(room.strategic, rng));
     }
@@ -339,9 +353,16 @@ export function entitledSeat(room: RoomState, intent: Intent): Player {
 
 /**
  * The slice of the room a player may see, and the only place the server filters
- * before broadcasting. Phase 6 masks unrevealed enemy units here; until then a
- * room view is the whole room, which is also what hotseat wants.
+ * before broadcasting. Every socket send in the Durable Object goes through it,
+ * so the fog is applied once, on the way out, and the room itself stays whole.
+ *
+ * Only the strategic map is fogged. The battle board is not: units that have
+ * taken the field are face-up by definition, and the deployment order already
+ * encodes who was seen beforehand.
+ *
+ * Local hotseat play does not pass through here — both players share a screen,
+ * so there is nothing to hide from whom.
  */
-export function viewFor(_player: Player, room: RoomState): RoomView {
-  return room;
+export function viewFor(player: Player, room: RoomState): RoomView {
+  return { ...room, strategic: maskFor(player, room.strategic) };
 }
