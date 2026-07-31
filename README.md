@@ -4,11 +4,15 @@ A playable demo of the Voorgeim board game, for playtesting the mechanics before
 committing to a physical print. Two players over the network or hotseat on one
 screen.
 
+Try online here: https://voorgeim-online.joonas-83b.workers.dev/ 
+
+---
+
 Game manual and more information in the `.VOORGEIM manual.md` file
 
 **Note:** This is designed as a semi-casual _board game_ (think of Terraforming Mars level accessibility, not Campaign For North Africa), hence game mechanics are designed to work on a tabletop without requiring a 100 page manual and a notebook for calculations. This does reflect in some actions feeling dumbed down in an online game.
 
--- 
+--- 
 
 ## Version history and playtest results
 
