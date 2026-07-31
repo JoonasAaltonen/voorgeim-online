@@ -79,9 +79,9 @@ An army is displayed on the strategic map with the individual units grouped toge
 
 Units on the strategic map can have 2 states: 
 
-    In armies - Units stacked into armies which can be used in battles
+**In armies** - Units stacked into armies which can be used in battles
 
-    Disorganized - Individual units that aren't part of armies. These units can freely move in the strategic map to neutral or friendly nodes but will need to be organized into armies to be used in battles. 
+**Disorganized** - Individual units that aren't part of armies. These units can freely move in the strategic map to neutral or friendly nodes but will need to be organized into armies to be used in battles. 
 
 2 Disorganized units located in the same node can be moved together as one action.
 
@@ -147,17 +147,14 @@ Recon units can move between the locations and behind enemy lines without initia
 
 Dice roll to attempt to recon the enemy forces in the same node
 
-    1 - Critical failure - Recon unit destroyed
-
-    2 - Failure - No results
-
-    3 - Partial success - Display 1 units from from the selected army
-
-    4 - Success - Display 2 units from from the selected army
-
-    5 - Great success - Display all enemy units from the selected army
-
-    6 - Critical success - Display all enemy units in all armies in the location
+| Dice value | Result | Effect |
+| ---- | ---- | ---- |
+| 1 | Critical failure | Recon unit destroyed |
+| 2 | Failure | No results |
+| 3 | Partial success | Display 1 units from from the selected army |
+| 4 | Success | Display 2 units from from the selected army |
+| 5 | Great success | Display all enemy units from the selected army |
+| 6 | Critical success | Display all enemy units in all armies in the location |
 
 # Battles 
 
@@ -203,13 +200,10 @@ Players take turns to take 1 action in the battle map, started by the attacker. 
 
 One action can be any of the following:
 
-    Attack an enemy unit with one of their own
-
-    Move a unit into an empty adjacent location in any 8 directions
-
-    Withdraw a unit from the battle if the unit is located in the last row of the deployment grid
-
-    Use their indirect fire support or withdraw the support unit from the battle
+ - Attack an enemy unit with one of their own 
+ - Move a unit into an empty adjacent location in any 8 directions
+ - Withdraw a unit from the battle if the unit is located in the last row of the deployment grid
+ - Use their indirect fire support or withdraw the support unit from the battle
 
 ### Attacking enemy units 
 
@@ -217,13 +211,15 @@ Units are able to move and attack against adjacent locations in all 8 directions
 
 Attacks are individual Unit vs Unit attacks, the breakthrough / toughness value defines how many dice are rolled by both sides, greatest value defines the outcome
 
-    Example of a battle roll: 
+Example of a battle roll: 
 
-    Unit with 3 breakthrough rolls 3 dice to attack, unit with 2 toughness rolls only 2 to defend
+```
+Unit with 3 breakthrough rolls 3 dice to attack, unit with 2 toughness rolls only 2 to defend
 
-    Attacker rolls values 4, 2, 3 and defender rolls values 1, 5
+Attacker rolls values 4, 2, 3 and defender rolls values 1, 5
 
-    The attack and defend values used for the combat are 4 for the attacker and 5 for the defender.
+The attack and defend values used for the combat are 4 for the attacker and 5 for the defender.
+``` 
 
 A successful attack by a frontline unit (ie. anything else than artillery) that destroys the opposing enemy moves the attacking unit to the location of the defeated enemy. 
 
@@ -259,21 +255,25 @@ Every time a unit attacks another one, they roll equal amount of attack rolls to
 
 Attacker rolls:
 
-1 - Critical failure - Attacking unit takes 1 HP damage
-2 - Failure - No damage dealt
-3 - Partial success - Deliver base damage -1
-4 - Success - Deals unit's base damage
-5 - Great success - Deals base damage and has possible defender damage reduced by 1
-6 - Critical success - Deals base damage +1 and has defender damage reduced by 1
+| Dice value | Result | Effect |
+| ---- | ---- | ---- |
+| 1 | Critical failure | Attacking unit takes 1 HP damage 
+| 2 | Failure | No damage dealt |
+| 3 | Partial success | Deliver base damage -1 |
+| 4 | Success | Deals unit's base damage |
+| 5 | Great success | Deals base damage and has possible defender damage reduced by 1 |
+| 6 | Critical success | Deals base damage +1 and has defender damage reduced by 1 |
 
 Defender rolls:
 
-1 - Critical failure - Defending unit takes 1 HP damage regardless of attacker roll
-2 - Failure - Receive attacker damage with no counter
-3 - Partial success - Receive attacker's damage but counter with base damage -1
-4 - Success - Reduce attacker damage by 1 and counter with base damage -1
-5 - Great success - Reduce attacker damage by 1 and counter with base damage
-6 - Critical success - Reduce attacker damage by 2 and counter with base damage
+| Dice value | Result | Effect |
+| ---- | ---- | ---- |
+| 1 | Critical failure | Defending unit takes 1 HP damage regardless of attacker roll |
+| 2 | Failure | Receive attacker damage with no counter |
+| 3 | Partial success | Receive attacker's damage but counter with base damage -1 |
+| 4 | Success | Reduce attacker damage by 1 and counter with base damage -1 |
+| 5 | Great success | Reduce attacker damage by 1 and counter with base damage |
+| 6 | Critical success | Reduce attacker damage by 2 and counter with base damage |
 
 ## Indirect fire
 
@@ -299,11 +299,11 @@ Indirect fire support units can withdraw from the battle at any time using the a
 
 Artillery units are able attack enemy units in the surrounding 8 locations similarly to other units, but are also able to fire over one deployment row in 90 degree angles with a 3 location attack radius, similarly to a knight movement on a chess board but including the locations in the middle of the L shape that a chess pawn would not be allowed to move into.
 
-    Units which cannot reach the attacking artillery unit (ie. infantry 1 row further away) will have their normal defensive rolls to reduce the oncoming damage, but cannot deliver any counter damage. 
+Units which cannot reach the attacking artillery unit (ie. infantry 1 row further away) will have their normal defensive rolls to reduce the oncoming damage, but cannot deliver any counter damage. 
 
-    Artillery unit will not move to the attacked location even if the enemy unit was destroyed but will need to be moved on another turn.
+Artillery unit will not move to the attacked location even if the enemy unit was destroyed but will need to be moved on another turn.
 
-    Artillery vs Artillery duels can be dangerous due to the combination of high damage and low HP of the units.
+Artillery vs Artillery duels can be dangerous due to the combination of high damage and low HP of the units.
 
 ### Infantry
 
