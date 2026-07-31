@@ -1,111 +1,10 @@
-# 
+This is the game manual draft for the board game. It has not yet been ordered into a cohesive printable manual but it contains all the necessary rules and information of the game at its current state.
 
-[Strategic Map](#strategic-map)
-
-[Map legend and color codes](#map-legend-and-color-codes)
-
-[Unit movement and movement nodes](#unit-movement-and-movement-nodes)
-
-[Asymmetric nodes](#asymmetric-nodes)
-
-[Staging area / home base](#staging-area-/-home-base)
-
-[Movement supply limit](#movement-supply-limit)
-
-[Controlled and contested locations](#controlled-and-contested-locations)
-
-[Fog of war](#fog-of-war)
-
-[Armies and disorganized units](#armies-and-disorganized-units)
-
-[Units](#units)
-
-[Unit properties](#unit-properties)
-
-[Unit types](#unit-types)
-
-[Defensive fortifications](#defensive-fortifications)
-
-[Recon](#recon)
-
-[Battles](#battles)
-
-[Unit deployment](#unit-deployment)
-
-[Deployment order](#deployment-order)
-
-[Battle gameplay loop](#battle-gameplay-loop)
-
-[Attacking enemy units](#attacking-enemy-units)
-
-[Finishing battles](#finishing-battles)
-
-[Victory conditions](#victory-conditions)
-
-[Withdrawn units](#withdrawn-units)
-
-[Retreating into a full location](#retreating-into-a-full-location)
-
-[Choosing the assault force](#choosing-the-assault-force)
-
-[Battle dice rolls](#battle-dice-rolls)
-
-[Indirect fire](#indirect-fire)
-
-[Unit special abilities](#unit-special-abilities)
-
-[Artillery](#artillery)
-
-[Infantry](#infantry)
-
-[Other rules and core gameplay loop](#other-rules-and-core-gameplay-loop)
-
-[Turn phases:](#turn-phases:)
-
-[Recon](#recon-1)
-
-[Strategic](#strategic)
-
-[Battle](#battle)
-
-[Supply limit check](#supply-limit-check)
-
-[Army reorganizing](#army-reorganizing)
-
-[Winning the game](#winning-the-game)
-
-[Future](#future)
-
-[Resources and income](#resources-and-income)
-
-[Unit production](#unit-production)
-
-[Terrain - applies bonuses or penalties](#terrain---applies-bonuses-or-penalties)
-
-[Special units](#special-units)
-
-[Naval combat](#naval-combat)
-
-
-# Strategic Map {#strategic-map}
+# Strategic Map
 
 The map currently holds 28 locations or nodes which can be contested. Each location has 1-3 division slots on both sides where the players can move their units to. The players can only place units on the side of the node facing their “home direction”, leaving the other half of the node empty. Exception to this is the asymmetric nodes where a player can spend an action to change the defensive direction to occupy a side with a different number of division slots.
 
-## Map legend and color codes {#map-legend-and-color-codes}
-
-Movement locations background: #EFE9D8  
-Naval movement locations background: #C3CFFA  
-Division spots: #FBFAF4   
-Movement paths: #D9D9D9  
-Plains: #85B252  
-Forest: #407800  
-Mountain: #87712F  
-Urban: #B3B3B3  
-Sea: #ADFFFD   
-Coastline / beach: #CEBF92  
-Staging areas: #AC677E (#B15C84 at 88% opacity)
-
-## Unit movement and movement nodes {#unit-movement-and-movement-nodes}
+## Unit movement and movement nodes
 
 Movement paths connect the locations to allow unit movement between them
 
@@ -121,17 +20,17 @@ Sea nodes allow land units to transport by sea but battles cannot commence over 
 
 Sea nodes can always supply only 2 unit per node and cannot be used for reorganizing armies.
 
-## Asymmetric nodes {#asymmetric-nodes}
+## Asymmetric nodes
 
 Empty asymmetric nodes (1v2, 2v3) have their frontlines occupied from the direction of approach. A player may use a strategic action to move within the empty node to occupy the other side of it instead. In case the position is contested after the player moves to occupy the node from the other side, the opponent will now enter the battle from the "wrong side". 
 
 If a friendly unit is present in an asymmetric node, any entering friendly units will join the same side regardless of the approach direction.
 
-## Staging area / home base {#staging-area-/-home-base}
+## Staging area / home base
 
 A location with no supply cap where a player can keep their units which haven't been sent to action. Staging area always allows reorganizing units to armies and hiding their identity even if the nearby nodes would be contested.  
 
-## Movement supply limit {#movement-supply-limit}
+## Movement supply limit
 
 Each location in the map has a supply limit which limits the number of units that can stay organized in the node. 
 
@@ -141,7 +40,7 @@ Movement nodes can momentarily exceed the maximum supply capacity as long as the
 
 Any number of disorganized units in a location will use 1 supply, but they do not block movement into the division slots of the node for armies. This allows players to move their armies past any disorganized units and to collect the disorganized units in controlled locations to reorganize them.
 
-## Controlled and contested locations {#controlled-and-contested-locations}
+## Controlled and contested locations
 
 A location is considered controlled when it is occupied by at least one friendly army (disorganized individual units don't count) and none of the adjacent connected locations are occupied by the opposing player. 
 
@@ -157,14 +56,12 @@ Contested nodes can supply 3 units in each division slot
 
 If a location turns from controlled to contested while holding more units than can be supplied in the contested state, the player must move the excess units during their next strategic turn or they become disorganized. 
 
-## Fog of war {#fog-of-war}
-
+## Fog of war
 Opposing units stay hidden (face down on board) until revealed by recon or engaged in a battle.
 
 Revealed units can be reorganized in controlled locations to hide their identity again
 
-# Armies and disorganized units {#armies-and-disorganized-units}
-
+# Armies and disorganized units
 Players start with individual units which need to be organized into armies in the staging area or in controlled locations. Organizing units into an army uses one player action of the turn.
 
 Initial units when starting the game:   
@@ -196,9 +93,9 @@ If a player loses a battle in a location they have disorganized units, these uni
 If an opposing army is present in the location after the battle, unprotected disorganized units will be overran by the army at the beginning of the opposing player's turn. 
 This means initiative being in favor of the player with the disorganized units may give them an additional turn to save the units, or they may be overran in the very next sequence of actions if the initiative was in favor of the opponent.  
 
-# Units {#units}
+# Units
 
-## Unit properties {#unit-properties}
+## Unit properties 
 
 Unit type - Soft or hard target type
 
@@ -222,7 +119,7 @@ Hitpoints - How much damage the unit can take before being wounded or destroyed
 | Anti-tank | Soft target | 1 | 3 | 2 | 2 | 2 |
 | Armor | Hard target | 2 | 2 | 3 | 1 | 4 |
 
-## Defensive fortifications {#defensive-fortifications}
+## Defensive fortifications 
 
 Players can spend their strategic actions to construct defensive fortifications in locations they hold armies in. Each fortification built is added to the army units and must be deployed in the next battle that happens in the location. 
 
@@ -240,7 +137,7 @@ Fortifications do not protect occupying units from damage received from critical
 A fortification can be occupied by an enemy unit and the defensive benefits apply until the fort is destroyed. If an enemy unit occupies a fortification on the opposing side of the frontline, the fort will not offer protection against indirect fire support which is considered to be coming from the rear. 
 
 
-## Recon {#recon}
+## Recon 
 
 Recon units are used to reveal hidden enemy units. They are only present in the strategic map and move independently from the armies and fighting units. Recon units will not take part in battles. 
 
@@ -262,9 +159,9 @@ Dice roll to attempt to recon the enemy forces in the same node
 
     6 - Critical success - Display all enemy units in all armies in the location
 
-# Battles {#battles}
+# Battles 
 
-## Choosing the assault force {#choosing-the-assault-force}
+## Choosing the assault force
 
 The attacking player decides which of their armies in the location take part in the battle. Armies left out do not enter the battle board at all: they stay in the strategic map, organized and are untouched by the battle result. If the attacker has multiple armies present, this allows a "probing assault" with one army while another is held back for later operations.
 All units from an army selected for the battle must be committed to the deployment, in most cases preventing leaving a single unit on the strategic map to keep the location contested. 
@@ -275,7 +172,7 @@ Disorganized units never join a battle on either side, whoever initiated it.
 Wounded units cannot join an offensive battle, but will join on defender's side.
 In case either player or both have more units in their committed armies than can fit on the battle board (12), the leftover units stay organized in the battle location in the strategic map.
 
-## Unit deployment {#unit-deployment}
+## Unit deployment
 
 Player with units in a defended location (enemy units present) can decide to attack and initiate a battle that is fought on the battle board. All unit coins from the strategic map that are involved in the battle are moved on to the tactical battle board.
 
@@ -288,7 +185,7 @@ Players do not have to deploy all their units to battle if they don’t want to.
 
 If either side had constructed fortifications, these must be deployed on the board with the units.
 
-### Deployment order {#deployment-order}
+### Deployment order
 
 If neither player had reconed the enemy forces, the attacker starts the deployment phase.
 
@@ -300,7 +197,7 @@ Defender must deploy at least one unit adjacent to the attacker units to avoid f
 
 If the defender was forced to deploy their units first due to recon advantage by the attacker, they must start by deploying at least one unit to the first row of the deployment grid.
 
-## Battle gameplay loop {#battle-gameplay-loop}
+## Battle gameplay loop 
 
 Players take turns to take 1 action in the battle map, started by the attacker. Players must take an action on their turn.
 
@@ -314,7 +211,7 @@ One action can be any of the following:
 
     Use their indirect fire support or withdraw the support unit from the battle
 
-### Attacking enemy units {#attacking-enemy-units}
+### Attacking enemy units 
 
 Units are able to move and attack against adjacent locations in all 8 directions including across the initial frontline of the battle board.
 
@@ -330,11 +227,11 @@ Attacks are individual Unit vs Unit attacks, the breakthrough / toughness value 
 
 A successful attack by a frontline unit (ie. anything else than artillery) that destroys the opposing enemy moves the attacking unit to the location of the defeated enemy. 
 
-## Finishing battles {#finishing-battles}
+## Finishing battles
 
 Battle phase ends in a victory of one side or in a stalemate. Any units that took damage but were not destroyed or wounded will be available as normally after the battle and are considered reinforced automatically. For example an Artillery unit that takes 1 HP damage during a victorious battle will be available with full HP on the next turn if the unit is engaged in another battle. For [wounded](#infantry) and [withdrawn units](#withdrawn-units) see the respective sections of the manual
 
-### Victory conditions  {#victory-conditions}
+### Victory conditions 
 
 Battle ends in a victory for a player when the opposing side has all their units destroyed or withdrawn from the battle board.  
 
@@ -345,7 +242,7 @@ In case the attacker army initially had more units than the battle line width, t
 
 In case of a stalemate, all units left on the battle board will stay organized (or be freely reorganized) in their armies which stay in the location of the battle. Any withdrawn units will become disorganized but also stay in the same location.
 
-### Withdrawn units {#withdrawn-units}
+### Withdrawn units
 
 Regardless of the outcome of the battle, all withdrawn units on both sides will separate from their armies and enter the disorganized state in the strategic map. 
 
@@ -356,37 +253,29 @@ Winner of the battle can freely reorganize their remaining units that were not w
 
 All withdrawn units will stay disorganized until they are formed back into an army in a controlled node or in the staging area
 
-## Battle dice rolls {#battle-dice-rolls}
+## Battle dice rolls
+
+Every time a unit attacks another one, they roll equal amount of attack rolls to their Breakthrough value, and the defender rolls equal amount of defensive rolls to their Toughness value.
 
 Attacker rolls:
 
 1 - Critical failure - Attacking unit takes 1 HP damage
-
 2 - Failure - No damage dealt
-
 3 - Partial success - Deliver base damage -1
-
 4 - Success - Deals unit's base damage
-
 5 - Great success - Deals base damage and has possible defender damage reduced by 1
-
 6 - Critical success - Deals base damage +1 and has defender damage reduced by 1
 
 Defender rolls:
 
 1 - Critical failure - Defending unit takes 1 HP damage regardless of attacker roll
-
 2 - Failure - Receive attacker damage with no counter
-
 3 - Partial success - Receive attacker's damage but counter with base damage -1
-
 4 - Success - Reduce attacker damage by 1 and counter with base damage -1
-
 5 - Great success - Reduce attacker damage by 1 and counter with base damage
-
 6 - Critical success - Reduce attacker damage by 2 and counter with base damage
 
-## Indirect fire {#indirect-fire}
+## Indirect fire
 
 The strategic map has 4 locations which support indirect fire support to another location. 
 
@@ -404,9 +293,9 @@ Indirect fire support units can be targeted by an enemy artillery unit which has
 
 Indirect fire support units can withdraw from the battle at any time using the action of the turn. The withdrawn support unit will not enter disorganized state but will stay revealed until reorganized in a controlled node.    
 
-## Unit special abilities {#unit-special-abilities}
+## Unit special abilities
 
-### Artillery {#artillery}
+### Artillery
 
 Artillery units are able attack enemy units in the surrounding 8 locations similarly to other units, but are also able to fire over one deployment row in 90 degree angles with a 3 location attack radius, similarly to a knight movement on a chess board but including the locations in the middle of the L shape that a chess pawn would not be allowed to move into.
 
@@ -416,7 +305,7 @@ Artillery units are able attack enemy units in the surrounding 8 locations simil
 
     Artillery vs Artillery duels can be dangerous due to the combination of high damage and low HP of the units.
 
-### Infantry {#infantry}
+### Infantry
 
 Infantry units will not be outright destroyed after losing their 4 HP. Instead the unit enters the "wounded" state which allows them to attempt withdrawing while having their damage output modified by -1 (Rendering them mostly useless and completely unable to deal any hard attack that makes them very vulnerable against armor).
 
@@ -431,21 +320,21 @@ Wounded infantry units can withdraw from the battle after which the strategic ma
 Wounded units can be included in reorganized armies after battles, but they can’t participate in an attack against the enemy and if forced into a defensive engagement, they will enter the battle board in the wounded state.  
          
 
-# Other rules and core gameplay loop {#other-rules-and-core-gameplay-loop}
+# Other rules and core gameplay loop
 
 Each round starts with a dice roll for "initiative" to decide which player starts the sequence. Roll until one player has a greater value.
 
 Each round is then split into player turns which have the different phases.
 
-## Turn phases: {#turn-phases:}
+## Turn phases:
 
-### Recon {#recon-1}
+### Recon 
 
 Players have 2 actions that can be performed with their recon units (movement or recon, can be separate units or 2 actions by the same one). Players take turns to perform the available recon actions.
 
 If a player does not have any recon units remaining, their recon phase is skipped.
 
-### Strategic {#strategic}
+### Strategic
 
 Players have 2 actions that can be performed in the strategic map with their armies and disorganized units. Each player completes their 2 actions sequentially without the other player’s turn in between.
 
@@ -456,16 +345,16 @@ Possible strategic actions:
 
 Initiating battles does not consume a strategic action so it is possible for multiple battles to occur during a single turn. Players can decide to initiate the battles before or in between their strategic actions. If a player has strategic actions remaining after a battle, they continue their turn to take the actions. 
 
-### Battle {#battle}
+### Battle
 
 When a battle is initiated in a location, the attacker chooses which of their armies make the assault, and the unit coins of those armies are moved onto the battle board together with the defender's entire organized garrison. The tactical battle is then fought. See the Tactical Battles section for details.  
 After the battle any remaining units are moved back onto the same location on the strategic board in a revealed state. 
 
-### Supply limit check {#supply-limit-check}
+### Supply limit check
 
 The final action the players should do during their turn is confirming any nodes they hold units in are not over the supply limits (6 per division slot in controlled locations, 3 per division slot in contested locations). Any location with units above the limit will have the topmost (latest arrived) exceeding units moved to disorganized state.
 
-## Army reorganizing {#army-reorganizing}
+## Army reorganizing 
 
 Reorganizing armies can be N-for-0 or N-for-N cards swapped between units. All units in the node where reorganization is done will be hidden in the fog of war and placed face down (regardless of whether they actually move between armies). If a location holds multiple armies, a single reorganization action allows freely moving units between all of them. 
 
@@ -483,6 +372,6 @@ Reorganizing wounded units in the staging area reinforces them back into full in
 
 Units can be split off armies into disorganized state without spending strategic actions.
 
-## Winning the game {#winning-the-game}
+## Winning the game
 
 The game is won by a player that occupies all locations adjacent to the enemy staging area for 2 full rounds (ie. both players have 2 turns, regardless of the order given by the initiative dice rolls). If any of the locations are relieved by the opponent, the counter is reset and the locations must be held for another 2 rounds if the attacker gains control of them again. 
