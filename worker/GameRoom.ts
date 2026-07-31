@@ -18,6 +18,15 @@ import type { Player } from '../src/engine/types';
 const SEATS: readonly Player[] = ['p1', 'p2'];
 
 /**
+ * How long a room may sit untouched before it reaps itself. The alarm is pushed
+ * back on every save, so an in-progress game never trips it — only a room whose
+ * players have gone quiet for this long is treated as abandoned. Five hours is
+ * far longer than any real game but short enough that stale rooms don't pile up
+ * in storage forever (and, on a paid plan, keep costing for storage they hold).
+ */
+const ROOM_TTL_MS = 5 * 60 * 60 * 1000;
+
+/**
  * What is actually written to storage: the room, stamped with the protocol it
  * was saved under. A deploy that changes the state shape bumps `PROTOCOL_VERSION`,
  * and anything stored under an older stamp is discarded on load rather than
@@ -179,6 +188,27 @@ export class GameRoom extends DurableObject<Env> {
   private async save(room: RoomState): Promise<void> {
     this.room = room;
     await this.ctx.storage.put(STORAGE_KEY, { protocol: PROTOCOL_VERSION, room } satisfies Persisted);
+    // Push the reaper back. As long as moves keep arriving the alarm stays in the
+    // future; once they stop, whichever was set last fires ROOM_TTL_MS later and
+    // cleans up. See alarm(). Setting an alarm overwrites any earlier one, so this
+    // is a refresh, not a pile-up.
+    await this.ctx.storage.setAlarm(Date.now() + ROOM_TTL_MS);
+  }
+
+  /**
+   * The reaper. Fires ROOM_TTL_MS after the last save. If anyone is still
+   * connected the room isn't abandoned — just a long, quiet game — so push the
+   * alarm back and leave the game alone. Otherwise both players are long gone:
+   * drop the stored game so it doesn't linger in storage. deleteAll() clears the
+   * alarm too, so a truly dead room leaves nothing behind.
+   */
+  async alarm(): Promise<void> {
+    if (this.ctx.getWebSockets().length > 0) {
+      await this.ctx.storage.setAlarm(Date.now() + ROOM_TTL_MS);
+      return;
+    }
+    await this.ctx.storage.deleteAll();
+    this.room = null;
   }
 
   private send(ws: WebSocket, msg: ServerMsg): void {

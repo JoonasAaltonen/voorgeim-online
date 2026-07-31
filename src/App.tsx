@@ -5,6 +5,7 @@ import { Lobby } from './ui/Lobby';
 import { ScenarioBuilder } from './ui/ScenarioBuilder';
 import { StrategicMap } from './ui/StrategicMap';
 import { StrategicPanel } from './ui/StrategicPanel';
+import { RestartDialog } from './ui/RestartDialog';
 import { useSession } from './state/sessionStore';
 import type { View } from './engine/room';
 import './App.css';
@@ -64,6 +65,8 @@ function App() {
           <ScenarioBuilder />
         </main>
       )}
+
+      <RestartDialog />
     </div>
   );
 }

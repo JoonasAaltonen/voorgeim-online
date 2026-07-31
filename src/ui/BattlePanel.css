@@ -156,3 +156,17 @@
 }
 .clog__fort { margin-top: 3px; color: #e0b568; }
 .clog__dmg { margin-top: 3px; color: #ffd08a; }
+
+/* Reserves grouped by the army each unit came from. The label is quiet — it is
+   orientation, not a control. */
+.reserves__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.reserves__army {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}

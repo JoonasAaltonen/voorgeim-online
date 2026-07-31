@@ -29,6 +29,8 @@ interface Store {
   reorgNode: NodeId | null;
   /** Node whose *free* post-battle reorganization table is open, if any. */
   freeReorgNode: NodeId | null;
+  /** The army whose split-off table is open, if any. */
+  splitArmy: string | null;
 
   selectArmy: (armyId: string) => void;
   /** Add or remove a loose unit from the pair in hand. */
@@ -54,10 +56,16 @@ interface Store {
   /** Cross to the other side of an asymmetric node. */
   swapSide: (nodeId: NodeId) => void;
   split: (unitIds: string[]) => void;
+  /** Open the table for choosing which units to split out of `armyId`. */
+  openSplit: (armyId: string) => void;
+  closeSplit: () => void;
   /** Build a fortification in the inspected node. */
   fortify: (nodeId: NodeId) => void;
-  /** Attack the enemy sharing a node, opening the battle board. */
-  initiateBattle: (nodeId: NodeId) => void;
+  /**
+   * Attack the enemy sharing a node, opening the battle board. `armyIds` names
+   * the assault force; anything left out stays in the node, organized.
+   */
+  initiateBattle: (nodeId: NodeId, armyIds?: string[]) => void;
   /** The beaten side names where to fall back to. */
   retreat: (nodeId: NodeId) => void;
   /** Roll a scout against an enemy army sharing its node. */
@@ -73,6 +81,7 @@ export const useStrategicStore = create<Store>((set, get) => ({
   inspectedNode: STAGING_NODE.p1,
   reorgNode: null,
   freeReorgNode: null,
+  splitArmy: null,
 
   selectArmy: (armyId) => {
     const cur = get().sel;
@@ -161,16 +170,21 @@ export const useStrategicStore = create<Store>((set, get) => ({
     session().dispatch({ t: 'stratSwapSide', nodeId });
   },
 
-  split: (unitIds) => session().dispatch({ t: 'stratSplit', unitIds }),
+  split: (unitIds) => {
+    if (unitIds.length > 0) session().dispatch({ t: 'stratSplit', unitIds });
+    set({ splitArmy: null });
+  },
+  openSplit: (armyId) => set({ splitArmy: armyId, sel: null }),
+  closeSplit: () => set({ splitArmy: null }),
 
   fortify: (nodeId) => {
     set({ sel: null });
     session().dispatch({ t: 'stratBuildFort', nodeId });
   },
 
-  initiateBattle: (nodeId) => {
+  initiateBattle: (nodeId, armyIds) => {
     set({ sel: null });
-    session().dispatch({ t: 'stratInitiateBattle', nodeId });
+    session().dispatch({ t: 'stratInitiateBattle', nodeId, armyIds });
   },
 
   retreat: (nodeId) => {
@@ -187,7 +201,7 @@ export const useStrategicStore = create<Store>((set, get) => ({
   endRecon: () => session().dispatch({ t: 'stratEndRecon' }),
   endTurn: () => session().dispatch({ t: 'stratEndTurn' }),
   reset: () => {
-    set({ sel: null, inspectedNode: STAGING_NODE.p1, reorgNode: null });
+    set({ sel: null, inspectedNode: STAGING_NODE.p1, reorgNode: null, splitArmy: null });
     session().dispatch({ t: 'stratReset' });
   },
 }));

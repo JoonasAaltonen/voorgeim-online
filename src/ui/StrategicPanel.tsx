@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { NODE_BY_ID, isAsymmetric, isSea, isStaging, slotsFor, type NodeId } from '../engine/map';
 import {
   ACTIONS_PER_TURN,
@@ -6,6 +7,7 @@ import {
   MAX_LOOSE_MOVE,
   armiesAt,
   armyCount,
+  armyNode,
   armyUnits,
   canFortify,
   canFreeReorg,
@@ -16,6 +18,7 @@ import {
   HOLD_TO_WIN,
   isRecon,
   looseAt,
+  LOOSE_TARGET,
   MASKED,
   occupies,
   reconAt,
@@ -34,6 +37,124 @@ import { ReorgDialog } from './ReorgDialog';
 import './StrategicPanel.css';
 
 const cap = (n: number) => (n === Infinity ? '∞' : n);
+
+/**
+ * Opening a battle, and choosing what to open it with.
+ *
+ * The attacker picks which of their armies make the assault; anything held back
+ * stays in the node, organized. That is the whole point of the choice — a probing
+ * attack with one army and a vanguard kept in reserve, rather than every unit in
+ * the location being swept in because they happened to be standing there.
+ *
+ * With one army there is no choice to make, so none is offered.
+ */
+/**
+ * "Restart map", behind a confirmation the opponent never hears about.
+ *
+ * The first Yes/No is deliberately local: a misclick here should cost nothing,
+ * not put a question on someone else's screen. Only past it does the request
+ * become a real proposal in the room — see `RestartRequest` for the rest of the
+ * negotiation, which `RestartDialog` draws.
+ */
+function RestartButton() {
+  const dispatch = useSession((st) => st.dispatch);
+  const pending = useSession((st) => !!st.room.restart);
+  const [asking, setAsking] = useState(false);
+
+  // A negotiation already under way owns the screen; offering the button again
+  // underneath it would only let a player stack a second request on their own.
+  if (pending) return null;
+
+  if (!asking) {
+    return (
+      <button type="button" className="sbtn sbtn--ghost" onClick={() => setAsking(true)}>
+        Restart map
+      </button>
+    );
+  }
+  return (
+    <div className="srestart">
+      <p className="srestart__lead">Are you sure you want to suggest a restart?</p>
+      <div className="srestart__opts">
+        <button
+          type="button"
+          className="sbtn"
+          onClick={() => {
+            setAsking(false);
+            dispatch({ t: 'proposeRestart' });
+          }}
+        >
+          Yes, ask my opponent
+        </button>
+        <button type="button" className="sbtn sbtn--ghost" onClick={() => setAsking(false)}>
+          No
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AttackControls({ nodeId }: { nodeId: NodeId }) {
+  const s = useSession((st) => st.room.strategic);
+  const initiateBattle = useStrategicStore((st) => st.initiateBattle);
+  const armies = armiesAt(s, nodeId, s.turn);
+  const [heldBack, setHeldBack] = useState<string[]>([]);
+
+  const committed = armies.filter((a) => !heldBack.includes(a.id));
+  // Wounded units cannot lead an assault, so an army of nothing but wounded
+  // brings no one — say so before the engine refuses it.
+  const able = committed.reduce(
+    (n, a) => n + armyUnits(s, a.id).filter((u) => !u.wounded).length,
+    0,
+  );
+
+  return (
+    <div className="sassault">
+      {armies.length > 1 && (
+        <>
+          <p className="smuted sassault__lead">
+            Choose the assault force. Armies left out stay here, organized and hidden — beating
+            them is a separate battle.
+          </p>
+          <div className="sassault__opts">
+            {armies.map((a, i) => {
+              const units = armyUnits(s, a.id);
+              const wounded = units.filter((u) => u.wounded).length;
+              const going = !heldBack.includes(a.id);
+              return (
+                <label key={a.id} className={`sarmychk${going ? ' sarmychk--on' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={going}
+                    onChange={() =>
+                      setHeldBack((h) =>
+                        h.includes(a.id) ? h.filter((x) => x !== a.id) : [...h, a.id],
+                      )
+                    }
+                  />
+                  <span>
+                    Army {i + 1} · {units.length} unit{units.length === 1 ? '' : 's'}
+                    {wounded > 0 && ` (${wounded} wounded, staying behind)`}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </>
+      )}
+      <button
+        type="button"
+        className="sbtn sbtn--attack"
+        disabled={able === 0}
+        onClick={() => initiateBattle(nodeId, committed.map((a) => a.id))}
+      >
+        {able === 0
+          ? 'Nobody able-bodied in the assault force'
+          : `Attack with ${able} unit${able === 1 ? '' : 's'} — opens the battle board`}
+      </button>
+    </div>
+  );
+}
 
 /**
  * What a coin can depict: a real unit type, or a face-down enemy chip. Masked
@@ -165,7 +286,7 @@ function ArmyRow({
 }) {
   const sel = useStrategicStore((st) => st.sel);
   const selectArmy = useStrategicStore((st) => st.selectArmy);
-  const split = useStrategicStore((st) => st.split);
+  const openSplit = useStrategicStore((st) => st.openSplit);
   const recon = useStrategicStore((st) => st.recon);
   const units = armyUnits(s, armyId);
   const held = sel?.kind === 'army' && sel.armyId === armyId;
@@ -199,13 +320,14 @@ function ArmyRow({
         </span>
       </button>
       {mine && units.length > 1 && (
-        // Splitting costs no action, so it is a plain control rather than
-        // something the reorganization table has to be opened for.
+        // Opens the table rather than splitting a unit outright: `armyUnits`
+        // sorts by id, so "the last one" was always the same type, and the
+        // player never got to say which unit actually leaves.
         <button
           type="button"
           className="army__split"
-          onClick={() => split([units[units.length - 1].id])}
-          title="Split one unit off — free, no action"
+          onClick={() => openSplit(armyId)}
+          title="Choose units to split off — free, no action"
         >
           split
         </button>
@@ -228,6 +350,7 @@ function NodeSide({ nodeId, owner, mine }: { nodeId: NodeId; owner: Player; mine
   const s = useSession((st) => st.room.strategic);
   const sel = useStrategicStore((st) => st.sel);
   const toggleLoose = useStrategicStore((st) => st.toggleLoose);
+  const doRecon = useStrategicStore((st) => st.recon);
   const armies = armiesAt(s, nodeId, owner);
   const loose = looseAt(s, nodeId, owner);
   const recon = reconAt(s, nodeId, owner);
@@ -313,7 +436,18 @@ function NodeSide({ nodeId, owner, mine }: { nodeId: NodeId; owner: Player; mine
         <div className="loose">
           <div className="loose__head">
             Disorganized · {loose.length}
-            <span className="loose__cost">1 supply</span>
+            {scoutId ? (
+              <button
+                type="button"
+                className="army__recon"
+                onClick={() => doRecon(scoutId, LOOSE_TARGET)}
+                title="Roll this scout against the disorganized units — same table as an army"
+              >
+                scout
+              </button>
+            ) : (
+              <span className="loose__cost">1 supply</span>
+            )}
           </div>
           <div className="side__units">
             {byType(loose).map(([type, ids]) => {
@@ -378,10 +512,13 @@ export function StrategicPanel() {
   const reorgNode = useStrategicStore((st) => st.reorgNode);
   const openReorg = useStrategicStore((st) => st.openReorg);
   const freeReorgNode = useStrategicStore((st) => st.freeReorgNode);
+  const splitArmy = useStrategicStore((st) => st.splitArmy);
+  // The table is opened by army, but rendered by node — an army's position is
+  // derived from its members, so ask the board where it actually stands.
+  const splitNode = splitArmy ? armyNode(s, splitArmy) : null;
   const openFreeReorg = useStrategicStore((st) => st.openFreeReorg);
   const dismissFreeReorg = useStrategicStore((st) => st.dismissFreeReorg);
   const swapSide = useStrategicStore((st) => st.swapSide);
-  const initiateBattle = useStrategicStore((st) => st.initiateBattle);
   const fortify = useStrategicStore((st) => st.fortify);
   const retreat = useStrategicStore((st) => st.retreat);
   const error = useSession((st) => st.error);
@@ -585,11 +722,7 @@ export function StrategicPanel() {
           {/* Node-scoped actions live here rather than on the map: the map keeps
               to two gestures, and this panel already shows what the action acts
               on. */}
-          {canAttack && (
-            <button type="button" className="sbtn sbtn--attack" onClick={() => initiateBattle(node.id)}>
-              Attack the enemy here — opens the battle board
-            </button>
-          )}
+          {canAttack && <AttackControls nodeId={node.id} />}
           {woundedCantAttack && (
             <p className="smuted spanel__adj">
               Your units here are wounded — they cannot mount an attack, only defend.
@@ -620,9 +753,7 @@ export function StrategicPanel() {
         </div>
       )}
 
-      <button type="button" className="sbtn sbtn--ghost" onClick={reset}>
-        Restart map
-      </button>
+      <RestartButton />
 
       <ol className="slog">
         {log.map((e) => (
@@ -634,6 +765,7 @@ export function StrategicPanel() {
 
       {reorgNode && <ReorgDialog nodeId={reorgNode} />}
       {freeReorgNode && <ReorgDialog nodeId={freeReorgNode} free />}
+      {splitArmy && splitNode && <ReorgDialog nodeId={splitNode} splitArmy={splitArmy} />}
     </aside>
   );
 }

@@ -37,6 +37,15 @@ export interface CombatEntry {
   result: CombatResult;
   /** True when the attack was indirect fire from the support slot. */
   indirect?: boolean;
+  /**
+   * Where the two units stood *before* the exchange, so the board can ring them
+   * afterwards. They have to be captured here rather than looked up later: a
+   * destroyed unit loses its `cellId`, and a victorious frontline unit advances
+   * into the cell it just cleared. The recorded pair is the only record of who
+   * shot whom from where.
+   */
+  attackerCell?: string;
+  defenderCell?: string;
   /** Set when a fortification sheltered the defender from the attack. */
   fortDefender?: FortHit;
   /** Set when a fortification sheltered the attacker from the counter. */
@@ -94,6 +103,18 @@ export interface BattleState {
    * difference between withdrawing and being shot back.
    */
   attackerBrokeOff: boolean;
+  /**
+   * Players who have answered the indirect-fire offer, taken or declined.
+   *
+   * Offering a gun is not the same as fielding one: an artillery that shows up in
+   * the deployment window has already told the enemy it exists, which is the one
+   * thing its owner may not want to spend. So the offer is never carried in the
+   * battle — it is recomputed from each player's own side of the map — and all
+   * that is recorded here is that the question has been put and answered. A name
+   * in this list is the only thing the opponent learns, and it says nothing about
+   * whether there was ever a gun to call.
+   */
+  supportAsked: Player[];
   winner: Player | 'stalemate' | null;
   log: LogEntry[];
   seq: number;
@@ -214,12 +235,47 @@ export function assembleBattle(params: {
     deploy: { row: 0, index: 0, firstDeployer: fd },
     // The attacker acts first, so they have not yet had a turn to break off in.
     attackerBrokeOff: false,
+    supportAsked: [],
     winner: null,
     log: [],
     seq: 0,
   };
   log(s, 'info', `Deployment begins — ${playerLabel(fd)} deploys first, front row.`);
   return s;
+}
+
+/**
+ * Answer the indirect-fire offer: bring `gun` onto the board as this side's
+ * support, or decline by passing null. Either way the question is closed for the
+ * rest of the battle — "must be done immediately when the battle is initiated and
+ * cannot be done after the battle has started", and deployment is the last moment
+ * that is still before the battle.
+ *
+ * Not gated on whose deploy turn it is. Both players may answer as soon as the
+ * board opens, which is what keeps the choice as close to simultaneous as an
+ * online game can make it: waiting for your turn would mean the second answerer
+ * knows whether the first called a gun in.
+ */
+export function callSupport(
+  state: BattleState,
+  player: Player,
+  gun: BattleUnit | null,
+): Transition {
+  if (state.phase !== 'deployment') {
+    return { state, error: 'Indirect fire is called before the battle, not during it.' };
+  }
+  if (state.supportAsked.includes(player)) {
+    return { state, error: 'You have already answered on indirect fire.' };
+  }
+  const s = clone(state);
+  s.supportAsked.push(player);
+  if (gun) {
+    s.units[gun.id] = gun;
+    log(s, 'info', `${playerLabel(player)} calls in indirect fire support — the gun is revealed.`);
+  } else {
+    log(s, 'info', `${playerLabel(player)} declines indirect fire support.`);
+  }
+  return { state: s };
 }
 
 export function createBattle(sc: Scenario): BattleState {
@@ -440,6 +496,8 @@ export function attack(
       attackerRolls: aRoll.rolls,
       defenderRolls: dRoll.rolls,
       result: res,
+      attackerCell: a.cellId,
+      defenderCell: targetCell,
       fortDefender: atDefender.fort,
       fortAttacker: atAttacker.fort,
     },
@@ -561,6 +619,8 @@ export function indirectFire(
         defenderRolls: dRoll.rolls,
         result: res,
         indirect: true,
+        attackerCell: sup.cellId,
+        defenderCell: tc,
         fortDefender: atTarget.fort,
       },
     },

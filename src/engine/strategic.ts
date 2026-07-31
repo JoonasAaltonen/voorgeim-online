@@ -75,6 +75,9 @@ export const MAX_LOOSE_MOVE = 2;
 /** Sentinel target in a reorganization: gather these units into a brand-new army. */
 export const NEW_ARMY = 'new';
 
+/** Sentinel target for a recon attempt: the enemy's disorganized pile in the node. */
+export const LOOSE_TARGET = 'disorganized';
+
 /**
  * A grouping token. Armies hold no state of their own beyond identity and the
  * move stamp; membership is `MapUnit.armyId` pointing back here, and position is
@@ -451,6 +454,67 @@ export function supplyCap(s: StrategicState, nodeId: NodeId, player: Player): nu
 }
 
 /**
+ * Division spots a player can fill in a node — one army to a spot. "Each location
+ * has 1-3 division slots on both sides where the players can move their units
+ * to", and disorganized units "do not block movement into the division slots of a
+ * node for armies", so the spots are counted against armies alone: any number of
+ * loose units sit in the gaps.
+ *
+ * Slots come from the side held, exactly as supply does — cross into an
+ * asymmetric node the wrong way and you get fewer spots as well as less supply.
+ * Staging is uncapped, and at sea no spots are painted at all; a sea node is held
+ * in check by its flat supply instead.
+ */
+export function slotCap(s: StrategicState, nodeId: NodeId, player: Player): number {
+  if (isStaging(nodeId) || isSea(nodeId)) return Infinity;
+  return slotsFor(nodeId, sideOf(s, nodeId, player));
+}
+
+/**
+ * Is there a spot free for one more of `player`'s armies to stand in?
+ *
+ * "Each division slot in a location can only hold one army." The two sides of a
+ * node have their own spots, so an enemy army opposite never takes one of yours —
+ * only your own armies compete for these.
+ *
+ * `side` is passed in rather than read off the node because the caller usually
+ * knows something `sideOf` cannot: an army that has not arrived yet has no side
+ * on the board, and `arrivalSide` is the only thing that knows where it will land.
+ */
+export function hasFreeSlot(
+  s: StrategicState,
+  nodeId: NodeId,
+  player: Player,
+  side: Side = sideOf(s, nodeId, player),
+): boolean {
+  if (isStaging(nodeId) || isSea(nodeId)) return true;
+  return armiesAt(s, nodeId, player).length < slotsFor(nodeId, side);
+}
+
+/**
+ * Why a reassignment cannot stand: it would leave more armies in the node than
+ * the node has spots to put them in.
+ *
+ * Judged on the *result*, not on whether a new army is forming — forming one is
+ * fine in a node that is about to have an army dissolve out from under it, and
+ * merely keeping the count is fine in a node that is somehow already crowded.
+ * Only a reorganization that makes an over-full node no better is refused, so a
+ * player who inherits a bad stack can always reorganize their way out of it
+ * rather than being locked out of the one action that would fix it.
+ */
+function overSlots(
+  before: StrategicState,
+  after: StrategicState,
+  nodeId: NodeId,
+  player: Player,
+): string | null {
+  const cap = slotCap(after, nodeId, player);
+  const n = armiesAt(after, nodeId, player).length;
+  if (n <= cap || n <= armiesAt(before, nodeId, player).length) return null;
+  return `${nodeId} has ${cap} division spot${cap === 1 ? '' : 's'} — ${n} armies will not fit.`;
+}
+
+/**
  * Supply a player is drawing from a node. "Any number of disorganized units in a
  * node will use 1 supply" — so loose units cost a flat 1 between them, however
  * many there are.
@@ -525,7 +589,11 @@ export function legalArmyTargets(s: StrategicState, armyId: string): NodeId[] {
   const from = a ? armyNode(s, a.id) : null;
   if (!a || !from || a.owner !== s.turn || s.actionsLeft <= 0) return [];
   if (s.phase !== 'strategic') return [];
-  return NODE_BY_ID[from]?.adjacency ?? [];
+  // A node whose spots are already taken by this player's own armies is not a
+  // destination — offering it would only earn a refusal.
+  return (NODE_BY_ID[from]?.adjacency ?? []).filter((n) =>
+    hasFreeSlot(s, n, a.owner, arrivalSide(s, n, a.owner, from)),
+  );
 }
 
 /**
@@ -583,10 +651,21 @@ export function moveArmy(
   if (nodeId === from) return { state, error: 'Already there.' };
   if (!arePathLinked(from, nodeId)) return { state, error: 'No movement path to that location.' };
 
-  const s = clone(state);
   // Read the side before the movers land, or they would find themselves already
   // there and answer their own question.
-  const side = arrivalSide(s, nodeId, a.owner, from);
+  const side = arrivalSide(state, nodeId, a.owner, from);
+  // "Each division slot in a location can only hold one army", and this is also
+  // what makes the single-slot nodes chokepoints: with a friendly army already
+  // standing in the only spot, a second cannot pass through, however many actions
+  // are left.
+  if (!hasFreeSlot(state, nodeId, a.owner, side)) {
+    return {
+      state,
+      error: `${nodeId} has no free division spot on that side — your armies already fill it.`,
+    };
+  }
+
+  const s = clone(state);
   const moved = armyUnits(s, armyId);
   for (const u of moved) {
     u.nodeId = nodeId;
@@ -696,8 +775,21 @@ export function swapSide(
     return { state, error: 'The enemy is in that location — there is no free side to cross to.' };
   }
 
-  const s = clone(state);
   const to = otherPlayer(sideOf(state, nodeId, player));
+  // Crossing an asymmetric node is exactly a trade of one slot count for
+  // another, so it is the one move that can leave standing armies with nowhere
+  // to stand. Shifting from the wide side to the narrow one has to fit.
+  const armies = armiesAt(state, nodeId, player).length;
+  if (armies > slotsFor(nodeId, to)) {
+    return {
+      state,
+      error: `The far side of ${nodeId} has only ${slotsFor(nodeId, to)} division spot${
+        slotsFor(nodeId, to) === 1 ? '' : 's'
+      } — your ${armies} armies will not fit.`,
+    };
+  }
+
+  const s = clone(state);
   for (const u of unitsAtFor(s, nodeId, player)) {
     if (!isRecon(u)) u.side = to;
   }
@@ -824,6 +916,8 @@ export function reorganize(
     else s.units[id].armyId = target === NEW_ARMY ? created! : target;
   }
   dissolveEmpty(s);
+  const crowded = overSlots(state, s, nodeId, player);
+  if (crowded) return { state, error: crowded };
   settleReorg(s, nodeId, player, true);
 
   spend(s);
@@ -925,6 +1019,8 @@ export function freeReorganize(
     else s.units[id].armyId = target === NEW_ARMY ? created! : target;
   }
   dissolveEmpty(s);
+  const crowded = overSlots(state, s, nodeId, player);
+  if (crowded) return { state, error: crowded };
   settleReorg(s, nodeId, player, isStaging(nodeId) || controlFor(s, nodeId, player) === 'controlled');
   delete s.freeReorgs[nodeId];
   log(s, 'org', `${playerLabel(player)} re-sorts the victors at ${nodeId} — free after the battle.`);
@@ -942,7 +1038,7 @@ export function dismissFreeReorg(state: StrategicState, nodeId: NodeId): Transit
 }
 
 /** An army is its members; one with none has ceased to exist. */
-function dissolveEmpty(s: StrategicState): void {
+export function dissolveEmpty(s: StrategicState): void {
   for (const a of Object.values(s.armies)) {
     if (armyUnits(s, a.id).length === 0) delete s.armies[a.id];
   }
@@ -1170,12 +1266,26 @@ export function endTurn(state: StrategicState, rng: Rng = defaultRng): Transitio
   return { state: s };
 }
 
-/** Reveal up to `n` still-hidden units of `us`, returning the ids newly flipped. */
-function revealSome(us: MapUnit[], n: number): string[] {
+/**
+ * Reveal up to `n` still-hidden units of `us`, chosen at random, returning the
+ * ids newly flipped.
+ *
+ * Random is load-bearing, not a flourish. `armyUnits` sorts by id for a stable
+ * display, and unit ids begin with their type — so "the first n" is really
+ * "anti-tank, then armor, then artillery, then infantry", and a partial recon
+ * would hand over the hardest targets first, every single time. On the table a
+ * player pulls a chip out of a stack they cannot read. This is that.
+ */
+function revealSome(us: MapUnit[], n: number, rng: Rng): string[] {
+  const hidden = us.filter((u) => !u.revealed); // never waste a reveal on the known
+  // Partial Fisher-Yates: only the first `n` slots need to be settled.
+  const take = Math.min(n, hidden.length);
+  for (let i = 0; i < take; i++) {
+    const j = i + Math.floor(rng() * (hidden.length - i));
+    [hidden[i], hidden[j]] = [hidden[j], hidden[i]];
+  }
   const flipped: string[] = [];
-  for (const u of us) {
-    if (flipped.length >= n) break;
-    if (u.revealed) continue; // already known — don't waste the reveal on it
+  for (const u of hidden.slice(0, take)) {
     u.revealed = true;
     flipped.push(u.id);
   }
@@ -1189,11 +1299,17 @@ function revealSome(us: MapUnit[], n: number): string[] {
  *   1 destroyed · 2 nothing · 3 one unit · 4 two units · 5 the whole army ·
  *   6 every enemy fighting unit in the location.
  *
+ * `target` is an enemy army id, or `LOOSE_TARGET` for the enemy's disorganized
+ * units in the node. The manual only describes scouting armies, but disorganized
+ * units are just as hidden and just as worth identifying — and a critical success
+ * already exposes them — so leaving them unscoutable would be an accident of the
+ * wording rather than a rule. The pile is treated as one "army" for the roll.
+ *
  * Revealing only ever sets `revealed`; it never moves or removes an enemy unit
  * (roll 1 is the sole deletion, and it deletes the scout, not the enemy). Recon
- * units are never revealed by recon — they are never in an army. Roll 6 is read
- * as "you see everything here", so it flips every enemy fighting unit in the node,
- * armies and loose alike, not literally only army members.
+ * units are never revealed by recon. Roll 6 is read as "you see everything here",
+ * so it flips every enemy fighting unit in the node, armies and loose alike,
+ * whichever of the two was aimed at.
  *
  * An attempt costs one recon-phase action — the same budget a scout's movement
  * draws on, so two attempts, two moves, or one of each fill a turn's scouting.
@@ -1202,7 +1318,7 @@ function revealSome(us: MapUnit[], n: number): string[] {
 export function reconAttempt(
   state: StrategicState,
   reconId: string,
-  targetArmyId: string,
+  target: string,
   rng: Rng = defaultRng,
 ): Transition {
   const stop = frozen(state, 'recon');
@@ -1214,11 +1330,18 @@ export function reconAttempt(
   if (!isRecon(scout)) return { state, error: 'Only recon units can scout.' };
 
   const enemy = otherPlayer(state.turn);
-  const army = state.armies[targetArmyId];
-  if (!army || army.owner !== enemy) return { state, error: 'No enemy army to recon there.' };
   const node = scout.nodeId;
-  if (armyNode(state, targetArmyId) !== node) {
-    return { state, error: "That army is not in your scout's location." };
+  const loose = target === LOOSE_TARGET;
+  if (loose) {
+    if (looseAt(state, node, enemy).length === 0) {
+      return { state, error: 'No enemy disorganized units to recon there.' };
+    }
+  } else {
+    const army = state.armies[target];
+    if (!army || army.owner !== enemy) return { state, error: 'No enemy army to recon there.' };
+    if (armyNode(state, target) !== node) {
+      return { state, error: "That army is not in your scout's location." };
+    }
   }
 
   const s = clone(state);
@@ -1240,9 +1363,11 @@ export function reconAttempt(
   const targets =
     roll === 6
       ? unitsAtFor(s, node, enemy).filter((u) => !isRecon(u))
-      : armyUnits(s, targetArmyId);
+      : loose
+        ? looseAt(s, node, enemy)
+        : armyUnits(s, target);
   const cap = roll === 3 ? 1 : roll === 4 ? 2 : targets.length; // 5 and 6: all of `targets`
-  const flipped = revealSome(targets, cap);
+  const flipped = revealSome(targets, cap, rng);
   log(
     s,
     'info',

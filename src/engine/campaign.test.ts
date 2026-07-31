@@ -5,12 +5,15 @@
 // the translation — which units come across, and what the map looks like after.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MAP, NODE_BY_ID, STAGING_NODE, isSea, type NodeId } from './map';
+import { MAP, NODE_BY_ID, STAGING_NODE, isSea, slotsFor, type NodeId } from './map';
 import {
   createStrategic as newGame,
   endRecon,
   endTurn as handOver,
   armyUnits,
+  armiesAt,
+  armyCount,
+  sideOf,
   buildFort,
   SEA_SUPPLY,
   supplyCap,
@@ -43,6 +46,7 @@ import {
   resolveRetreat,
   retreatOptions,
   supportGuns,
+  callSupportAt,
 } from './campaign';
 import { assembleBattle, type BattleState } from './battle';
 import { otherPlayer, type BattleUnit, type Player, type UnitStatus } from './types';
@@ -223,6 +227,98 @@ describe('opening a battle', () => {
     expect(createBattleAt(s, BATTLE, 'p1').error).toBeTruthy();
   });
 
+  // The attacker picks the assault force; the defender never gets that choice.
+  describe('choosing which armies attack', () => {
+    it('commits only the named armies, leaving the rest at home', () => {
+      const s = createStrategic();
+      const probe = armyAt(s, 'p1', BATTLE, 'infantry', 2);
+      const vanguard = army(s, 'p1', BATTLE, 'armor', 2);
+      const [foe] = army(s, 'p2', BATTLE, 'infantry', 1);
+
+      const { battle, error } = createBattleAt(s, BATTLE, 'p1', [probe]);
+      expect(error).toBeUndefined();
+      for (const u of armyUnits(s, probe)) expect(battle!.units[u.id]).toBeDefined();
+      for (const u of vanguard) expect(battle!.units[u.id]).toBeUndefined();
+      expect(battle!.units[foe.id]).toBeDefined();
+    });
+
+    it('drags the whole garrison in on defence, whatever the defender would prefer', () => {
+      const s = createStrategic();
+      army(s, 'p1', BATTLE, 'infantry', 1);
+      const first = army(s, 'p2', BATTLE, 'infantry', 1);
+      const second = army(s, 'p2', BATTLE, 'armor', 1); // a separate p2 army
+      const { battle } = createBattleAt(s, BATTLE, 'p1');
+      for (const u of [...first, ...second]) expect(battle!.units[u.id]).toBeDefined();
+    });
+
+    it('sends everything when no choice is made', () => {
+      const s = createStrategic();
+      const a = army(s, 'p1', BATTLE, 'infantry', 1);
+      const b = army(s, 'p1', BATTLE, 'armor', 1);
+      army(s, 'p2', BATTLE, 'infantry', 1);
+      const { battle } = createBattleAt(s, BATTLE, 'p1');
+      for (const u of [...a, ...b]) expect(battle!.units[u.id]).toBeDefined();
+    });
+
+    it('refuses an empty choice, or an army from somewhere else', () => {
+      const s = createStrategic();
+      army(s, 'p1', BATTLE, 'infantry', 1);
+      army(s, 'p2', BATTLE, 'infantry', 1);
+      const elsewhere = armyAt(s, 'p1', NODE_BY_ID[BATTLE].adjacency[0], 'armor', 1);
+      expect(createBattleAt(s, BATTLE, 'p1', []).error).toBeTruthy();
+      expect(createBattleAt(s, BATTLE, 'p1', [elsewhere]).error).toMatch(/not in this location/i);
+    });
+
+    // "While the attacker can decide to not commit all armies, they must commit
+    // all units from the army they select." The choice is per army, never per
+    // unit — the wounded are the one exception, and they cannot attack at all.
+    it('commits every able-bodied unit of a chosen army, with no per-unit opt-out', () => {
+      const s = createStrategic();
+      const big = armyAt(s, 'p1', BATTLE, 'infantry', 4);
+      armyUnits(s, big)[0].wounded = true;
+      army(s, 'p2', BATTLE, 'infantry', 1);
+
+      const { battle } = createBattleAt(s, BATTLE, 'p1', [big]);
+      const sent = armyUnits(s, big).filter((u) => battle!.units[u.id]);
+      expect(sent).toHaveLength(3);
+      expect(sent.every((u) => !u.wounded)).toBe(true);
+    });
+
+    // Joonas's worst case: 9 already in the node and an 18-strong army marching
+    // in gives 27 on one side, against a board that seats 12. The other 15 never
+    // deploy — and must not keep the battle from ever ending.
+    it('resolves a battle with far more units than the board seats', () => {
+      const s = createStrategic();
+      const horde = armyAt(s, 'p1', BATTLE, 'infantry', 9);
+      const [foe] = army(s, 'p2', BATTLE, 'infantry', 1);
+      const { battle } = createBattleAt(s, BATTLE, 'p1', [horde]);
+
+      const committed = armyUnits(s, horde).filter((u) => battle!.units[u.id]);
+      expect(committed.length).toBeGreaterThan(0);
+      // Victory is judged on who is *on the board*, so reserves never stall it.
+      const b = finished(s, BATTLE, 'p1', 'p1', {
+        [committed[0].id]: { status: 'deployed' },
+        [foe.id]: { status: 'dead' },
+      });
+      const t = resolveBattle(s, b).state;
+      // Everyone who never took the field is untouched: organized, and still here.
+      for (const u of committed.slice(1)) {
+        expect(t.units[u.id].nodeId).toBe(BATTLE);
+        expect(t.units[u.id].armyId).toBe(horde);
+        expect(t.units[u.id].revealed).toBeFalsy();
+      }
+    });
+
+    it('refuses an assault led by nobody able-bodied', () => {
+      const s = createStrategic();
+      const hurt = armyAt(s, 'p1', BATTLE, 'infantry', 1);
+      armyUnits(s, hurt)[0].wounded = true;
+      army(s, 'p1', BATTLE, 'armor', 1); // able, but not the army being sent
+      army(s, 'p2', BATTLE, 'infantry', 1);
+      expect(createBattleAt(s, BATTLE, 'p1', [hurt]).error).toBeTruthy();
+    });
+  });
+
   it('lets the revealed side deploy first (recon advantage)', () => {
     const s = createStrategic();
     army(s, 'p1', BATTLE, 'infantry', 1); // attacker, hidden
@@ -242,10 +338,53 @@ describe('indirect-fire support', () => {
     const [gun] = army(s, 'p1', 'n08', 'artillery', 1);
     const guns = supportGuns(s, BATTLE, 'p1');
     expect(guns.map((g) => g.id)).toContain(gun.id);
+  });
+
+  // The reason the offer exists at all: an eligible gun that walks onto the board
+  // uninvited has told the enemy it is there, whether or not it ever fires.
+  it('keeps an eligible gun off the board until its owner calls it', () => {
+    const s = createStrategic();
+    army(s, 'p1', BATTLE, 'infantry', 1);
+    army(s, 'p2', BATTLE, 'infantry', 1);
+    const [gun] = army(s, 'p1', 'n08', 'artillery', 1);
 
     const { battle } = createBattleAt(s, BATTLE, 'p1');
-    expect(battle!.units[gun.id].support).toBe(true);
-    expect(battle!.units[gun.id].status).toBe('reserve');
+    expect(battle!.units[gun.id]).toBeUndefined();
+
+    const called = callSupportAt(s, battle!, 'p1', gun.id);
+    expect(called.error).toBeUndefined();
+    expect(called.state.units[gun.id].support).toBe(true);
+    expect(called.state.units[gun.id].status).toBe('reserve');
+  });
+
+  it('lets a player decline, and holds them to it', () => {
+    const s = createStrategic();
+    army(s, 'p1', BATTLE, 'infantry', 1);
+    army(s, 'p2', BATTLE, 'infantry', 1);
+    const [gun] = army(s, 'p1', 'n08', 'artillery', 1);
+
+    const { battle } = createBattleAt(s, BATTLE, 'p1');
+    const declined = callSupportAt(s, battle!, 'p1', null);
+    expect(declined.error).toBeUndefined();
+    expect(declined.state.units[gun.id]).toBeUndefined();
+
+    // "cannot be done after the battle has started" — and a declined offer is
+    // answered, so there is no second bite at it either.
+    const again = callSupportAt(s, declined.state, 'p1', gun.id);
+    expect(again.error).toBeTruthy();
+    expect(again.state.units[gun.id]).toBeUndefined();
+
+    // The other player's answer is still their own to give.
+    expect(callSupportAt(s, declined.state, 'p2', null).error).toBeUndefined();
+  });
+
+  it('refuses a gun that is not the caller’s to call', () => {
+    const s = createStrategic();
+    army(s, 'p1', BATTLE, 'infantry', 1);
+    army(s, 'p2', BATTLE, 'infantry', 1);
+    const [gun] = army(s, 'p1', 'n08', 'artillery', 1);
+    const { battle } = createBattleAt(s, BATTLE, 'p1');
+    expect(callSupportAt(s, battle!, 'p2', gun.id).error).toBeTruthy();
   });
 
   it('withholds it if the enemy is standing in the firing node', () => {
@@ -301,6 +440,73 @@ describe('posting the result back', () => {
     expect(t.units[aWith.id]?.revealed).toBe(true);
     expect(t.units[survivor.id]?.revealed).toBe(true);
     expect(t.units[survivor.id]?.armyId).toBeDefined(); // winner keeps its army
+  });
+
+  // Losing a battle is losing what you sent in, not everything you had standing
+  // in the location. A unit that never took the field stays put and stays in its
+  // army — that is what makes a vanguard a vanguard.
+  it('leaves a force that never took the field standing, organized, in the node', () => {
+    const s = createStrategic();
+    const [beaten] = army(s, 'p1', BATTLE, 'infantry', 1);
+    const held = army(s, 'p1', BATTLE, 'armor', 1)[0]; // an army kept out of it
+    const [winner] = army(s, 'p2', BATTLE, 'armor', 1);
+    const b = finished(s, BATTLE, 'p2', 'p2', {
+      [beaten.id]: { status: 'withdrawn' },
+      [winner.id]: { status: 'deployed' },
+    });
+    const after = resolveBattle(s, b).state;
+    const refuge = after.pendingRetreat!.options[0];
+    const t = resolveRetreat(after, refuge).state;
+
+    // The committed unit withdrew: disorganized, and gone from the node.
+    expect(t.units[beaten.id].nodeId).toBe(refuge);
+    expect(t.units[beaten.id].armyId).toBeUndefined();
+    // The one held back is untouched — so p2 has won without clearing the ground.
+    expect(t.units[held.id].nodeId).toBe(BATTLE);
+    expect(t.units[held.id].armyId).toBeDefined();
+    expect(t.units[held.id].revealed).toBeFalsy();
+  });
+
+  // Disorganized units need no division spot, which is what lets a retreat
+  // always find somewhere to go — even a node the player's own armies fill.
+  it('lets a beaten force fall back onto a location its own armies already fill', () => {
+    const s = createStrategic();
+    const refuge = NODE_BY_ID[BATTLE].adjacency[0];
+    const spots = slotsFor(refuge, sideOf(s, refuge, 'p1'));
+    for (let i = 0; i < spots; i++) army(s, 'p1', refuge, 'infantry', 1);
+
+    const [beaten] = army(s, 'p1', BATTLE, 'infantry', 1);
+    const [winner] = army(s, 'p2', BATTLE, 'armor', 1);
+    const b = finished(s, BATTLE, 'p2', 'p2', {
+      [beaten.id]: { status: 'withdrawn' },
+      [winner.id]: { status: 'deployed' },
+    });
+    const after = resolveBattle(s, b).state;
+    // The crowded node is still on offer — own armies never close a road.
+    expect(after.pendingRetreat!.options).toContain(refuge);
+    const t = resolveRetreat(after, refuge).state;
+
+    const landed = t.units[beaten.id];
+    expect(landed).toBeDefined(); // not destroyed by its own side's crowding
+    expect(landed.nodeId).toBe(refuge);
+    expect(landed.armyId).toBeUndefined();
+    // It fit by not needing a spot: the armies already there still hold them all.
+    expect(armiesAt(t, refuge, 'p1')).toHaveLength(spots);
+  });
+
+  // An army whose last unit dies is gone. Nothing reorganizes after a battle, so
+  // without a sweep here the empty shell keeps counting against MAX_ARMIES.
+  it('dissolves an army the battle emptied', () => {
+    const s = createStrategic();
+    const wiped = armyAt(s, 'p1', BATTLE, 'infantry', 1);
+    const [winner] = army(s, 'p2', BATTLE, 'armor', 1);
+    const b = finished(s, BATTLE, 'p2', 'p2', {
+      [armyUnits(s, wiped)[0].id]: { status: 'dead' },
+      [winner.id]: { status: 'deployed' },
+    });
+    const t = resolveBattle(s, b).state;
+    expect(t.armies[wiped]).toBeUndefined();
+    expect(armyCount(t, 'p1')).toBe(0);
   });
 
   it('marks a wounded survivor wounded and revealed', () => {

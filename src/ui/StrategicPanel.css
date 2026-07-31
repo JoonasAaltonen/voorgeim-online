@@ -95,6 +95,19 @@
 .sreorg__opts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .sreorg__opts .sbtn { width: auto; margin: 0; }
 
+/* The local half of the restart confirmation — amber, because nothing has left
+   this screen yet and nothing will if the answer is no. */
+.srestart {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid #6a5a3a;
+  border-radius: 8px;
+  background: rgba(200, 160, 80, 0.08);
+}
+.srestart__lead { margin: 0; font-size: 0.82rem; line-height: 1.5; color: #d7dce3; }
+.srestart__opts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.srestart__opts .sbtn { width: auto; margin: 0; }
+
 /* Fortifications waiting in a node for the next battle. */
 .fort {
   font-size: 0.66rem;
@@ -358,3 +371,28 @@
   background: rgba(120, 200, 90, 0.14);
   border-color: rgba(120, 200, 90, 0.35);
 }
+
+/* Choosing the assault force before opening a battle. */
+.sassault {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sassault__lead { margin: 0; }
+.sassault__opts {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.sarmychk {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 7px;
+  border-radius: 5px;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.55;
+}
+.sarmychk--on { opacity: 1; }
+.sarmychk input { cursor: pointer; }

@@ -1,0 +1,66 @@
+/*
+ * Deliberately blocking. Every other message in this app is a banner you can
+ * ignore, because every other message is about a move you can retake. This one
+ * is not, and the opponent is waiting on it — so it sits over the board and
+ * stays there until answered.
+ */
+.rdialog {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(8, 10, 14, 0.72);
+  padding: 1rem;
+}
+
+.rdialog__box {
+  max-width: 26rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.4rem 1.5rem;
+  border: 1px solid #3a4354;
+  border-radius: 8px;
+  background: #171c24;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+
+.rdialog__lead {
+  margin: 0;
+  line-height: 1.5;
+  color: #e6ebf2;
+}
+
+.rdialog__opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.rbtn {
+  flex: 1 1 auto;
+  padding: 0.5rem 0.9rem;
+  border: 1px solid #46506a;
+  border-radius: 5px;
+  background: #222a36;
+  color: #e6ebf2;
+  font: inherit;
+  cursor: pointer;
+}
+.rbtn:hover {
+  background: #2b3543;
+}
+.rbtn:focus-visible {
+  outline: 2px solid #7fb0ff;
+  outline-offset: 2px;
+}
+
+/* The irreversible answer, marked as such — but not made the easy one. */
+.rbtn--warn {
+  border-color: #8a3b3b;
+  background: #3a2020;
+}
+.rbtn--warn:hover {
+  background: #4a2727;
+}

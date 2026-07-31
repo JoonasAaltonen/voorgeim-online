@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   applyIntent,
+  entitledSeat,
   battleMover,
   createRoom,
   viewFor,
@@ -191,6 +192,56 @@ describe('table intents', () => {
     const back = applyIntent(r, 'p2', { t: 'stratReset' }).state;
     expect(back.strategic.turn).toBe('p1');
     expect(unitsAt(back.strategic, STAGING_NODE.p1)).toHaveLength(25);
+  });
+});
+
+describe('a restart is negotiated, not pressed', () => {
+  it('does not touch the board until the opponent agrees', () => {
+    const started = applyIntent(room(), 'p1', { t: 'stratEndTurn' }).state;
+    const asked = applyIntent(started, 'p1', { t: 'proposeRestart' }).state;
+
+    expect(asked.restart).toEqual({ by: 'p1' });
+    expect(asked.strategic.turn).toBe('p2'); // the game carries on meanwhile
+
+    const agreed = applyIntent(asked, 'p2', { t: 'answerRestart', agree: true }).state;
+    expect(agreed.restart).toBeNull();
+    expect(agreed.strategic.turn).toBe('p1');
+    expect(unitsAt(agreed.strategic, STAGING_NODE.p1)).toHaveLength(25);
+    // Same room, same seats — only the game is new.
+    expect(agreed.code).toBe(asked.code);
+  });
+
+  it('refuses to let the proposer answer their own request', () => {
+    const asked = applyIntent(room(), 'p1', { t: 'proposeRestart' }).state;
+    const t = applyIntent(asked, 'p1', { t: 'answerRestart', agree: true });
+    expect(t.error).toBeDefined();
+    expect(t.state.restart).toEqual({ by: 'p1' });
+  });
+
+  it('hands a refusal back to the proposer rather than clearing it', () => {
+    const asked = applyIntent(room(), 'p1', { t: 'proposeRestart' }).state;
+    const no = applyIntent(asked, 'p2', { t: 'answerRestart', agree: false }).state;
+    expect(no.restart).toEqual({ by: 'p1', declined: true });
+
+    // And the opponent cannot then re-ask on the proposer's behalf, or twice.
+    expect(applyIntent(no, 'p2', { t: 'proposeRestart' }).error).toBeDefined();
+    expect(applyIntent(no, 'p2', { t: 'dismissRestart' }).error).toBeDefined();
+
+    const on = applyIntent(no, 'p1', { t: 'dismissRestart' }).state;
+    expect(on.restart).toBeNull();
+  });
+
+  it('lets the proposer withdraw an unanswered request', () => {
+    const asked = applyIntent(room(), 'p2', { t: 'proposeRestart' }).state;
+    expect(applyIntent(asked, 'p2', { t: 'dismissRestart' }).state.restart).toBeNull();
+  });
+
+  it('names the answering seat for hotseat, where one person holds both', () => {
+    const asked = applyIntent(room(), 'p1', { t: 'proposeRestart' }).state;
+    // Hotseat routes through `entitledSeat`; it must hand the answer to p2 even
+    // though p1 is the one at the keyboard and p1's turn is the current one.
+    expect(entitledSeat(asked, { t: 'answerRestart', agree: true })).toBe('p2');
+    expect(entitledSeat(asked, { t: 'dismissRestart' })).toBe('p1');
   });
 });
 

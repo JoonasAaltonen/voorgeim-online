@@ -34,6 +34,7 @@ import {
   fortsAt,
   freeReorganize,
   legalArmyTargets,
+  LOOSE_TARGET,
   legalLooseTargets,
   looseAt,
   moveArmy,
@@ -45,6 +46,7 @@ import {
   sideOf,
   splitUnits,
   supplyCap,
+  slotCap,
   swapSide,
   supplyUsed,
   unitsAt,
@@ -158,6 +160,65 @@ describe('armies and disorganized units', () => {
     const t = reorganize(s, STAGING_NODE.p1, { [spare.id]: NEW_ARMY });
     expect(t.error).toMatch(/already field/i);
     expect(t.state).toBe(s);
+  });
+
+  // "Each location has 1-3 division slots ... where the players can move their
+  // units to" — supply says how many units the ground feeds, spots say how many
+  // armies it has room to stand, and reorganizing has to respect both.
+  describe('division spots cap the armies in a node', () => {
+    it('reports the spots on the side held, and none at staging', () => {
+      const s = createStrategic();
+      expect(slotCap(s, inland.id, 'p1')).toBe(slotsFor(inland.id, 'p1'));
+      expect(slotCap(s, STAGING_NODE.p1, 'p1')).toBe(Infinity);
+    });
+
+    it('refuses a reorganization that would stand more armies than there are spots', () => {
+      const s = createStrategic();
+      const spots = slotsFor(inland.id, 'p1');
+      // Fill every spot, then try to split one more army out of the loose units.
+      for (let i = 0; i < spots; i++) placeArmy(s, 'p1', inland.id, 1);
+      place(s, 'p1', inland.id, 1);
+      const spare = looseAt(s, inland.id, 'p1')[0];
+
+      const t = reorganize(s, inland.id, { [spare.id]: NEW_ARMY });
+      expect(t.error).toMatch(/division spot/i);
+      expect(t.state).toBe(s);
+      // And the action was not spent on the refusal.
+      expect(t.state.actionsLeft).toBe(ACTIONS_PER_TURN);
+    });
+
+    it('allows a new army when an old one dissolves to make room', () => {
+      const s = createStrategic();
+      const spots = slotsFor(inland.id, 'p1');
+      const armies: string[] = [];
+      for (let i = 0; i < spots; i++) armies.push(placeArmy(s, 'p1', inland.id, 1));
+      place(s, 'p1', inland.id, 1);
+      const spare = looseAt(s, inland.id, 'p1')[0];
+
+      // The last army empties into the new one, so the count never rises.
+      const t = reorganize(s, inland.id, {
+        [spare.id]: NEW_ARMY,
+        [armyUnits(s, armies[spots - 1])[0].id]: NEW_ARMY,
+      });
+      expect(t.error).toBeUndefined();
+      expect(armiesAt(t.state, inland.id, 'p1')).toHaveLength(spots);
+    });
+
+    it('still lets a crowded node reorganize its way back down', () => {
+      const s = createStrategic();
+      const spots = slotsFor(inland.id, 'p1');
+      // More armies than spots, as only marching them in can produce — a player
+      // who inherits this must not be locked out of the action that fixes it.
+      const armies: string[] = [];
+      for (let i = 0; i < spots + 1; i++) armies.push(placeArmy(s, 'p1', inland.id, 1));
+
+      const merge = Object.fromEntries(
+        armies.slice(1).map((a) => [armyUnits(s, a)[0].id, armies[0]]),
+      );
+      const t = reorganize(s, inland.id, merge);
+      expect(t.error).toBeUndefined();
+      expect(armiesAt(t.state, inland.id, 'p1')).toHaveLength(1);
+    });
   });
 
   it('moves units between existing armies without creating one', () => {
@@ -633,11 +694,41 @@ describe('asymmetric node sides', () => {
 
   it('joins friends already there, whatever direction the newcomer came from', () => {
     const s = createStrategic();
-    enter(s, 'p1', LAND); // holds the single slot
-    expect(sideOf(s, 'n01', 'p1')).toBe('p2');
-    const second = enter(s, 'p1', SEA); // would land on the wide side if empty
-    expect(s.units[armyUnits(s, second)[0].id].side).toBe('p2'); // joined the garrison
-    expect(sideOf(s, 'n01', 'p1')).toBe('p2');
+    enter(s, 'p1', SEA); // holds the wide side, which has room for a second
+    expect(sideOf(s, 'n01', 'p1')).toBe('p1');
+    const second = enter(s, 'p1', LAND); // would land on the single slot if empty
+    expect(s.units[armyUnits(s, second)[0].id].side).toBe('p1'); // joined the garrison
+    expect(sideOf(s, 'n01', 'p1')).toBe('p1');
+  });
+
+  // "Locations with only a single slot are intentional chokepoints and armies
+  // cannot pass 'over' each other even if the player had 2 strategic actions
+  // remaining." Joining friends does not conjure a spot to join them in.
+  it('blocks a second army from a side with only one spot', () => {
+    const s = createStrategic();
+    enter(s, 'p1', LAND); // takes the single slot
+    const blocked = placeArmy(s, 'p1', SEA, 1);
+    s.turn = 'p1';
+    s.phase = 'strategic';
+    s.actionsLeft = ACTIONS_PER_TURN;
+    const t = moveArmy(s, blocked, 'n01');
+    expect(t.error).toMatch(/division spot/i);
+    expect(t.state).toBe(s);
+    expect(legalArmyTargets(s, blocked)).not.toContain('n01');
+  });
+
+  // Crossing trades one slot count for another, so it is the one move that can
+  // leave armies already on the board with nowhere to stand.
+  it('refuses a crossing onto a side too narrow for the armies making it', () => {
+    const s = createStrategic();
+    enter(s, 'p1', SEA); // wide side, 2 spots
+    enter(s, 'p1', SEA); // both now taken
+    s.turn = 'p1';
+    s.phase = 'strategic';
+    s.actionsLeft = ACTIONS_PER_TURN;
+    const t = swapSide(s, 'n01'); // the far side has 1
+    expect(t.error).toMatch(/division spot/i);
+    expect(t.state).toBe(s);
   });
 
   it('puts an arriving enemy opposite, whichever way they came in', () => {
@@ -1172,5 +1263,89 @@ describe('the shared log keeps the fog', () => {
     const shed = t.log.filter((l) => l.text.includes('out of supply'));
     expect(shed.length).toBeGreaterThan(0);
     for (const l of shed) expect(namesAType(l.text)).toBe(false);
+  });
+});
+
+// `armyUnits` sorts by id and ids start with the type, so "the first n hidden"
+// was really "anti-tank, then armor, then artillery, then infantry" — a partial
+// recon handed over the hardest targets first, every time.
+describe('recon reveals are not ordered by unit type', () => {
+  const d6 = (face: number) => () => (face - 0.5) / 6;
+
+  /** A p2 army holding one of each fighting type, with a p1 scout beside it. */
+  function mixed() {
+    const s = newGame();
+    const scout = Object.values(s.units).find((u) => u.owner === 'p1' && u.type === 'recon')!;
+    s.units[scout.id].nodeId = inland.id;
+    const armyId = `army-p2-${++s.tick}`;
+    s.armies[armyId] = { id: armyId, owner: 'p2', movedAt: s.tick };
+    for (const type of ['infantry', 'artillery', 'anti-tank', 'armor'] as const) {
+      const u = Object.values(s.units).find(
+        (x) => x.owner === 'p2' && !x.armyId && x.type === type,
+      )!;
+      u.nodeId = inland.id;
+      u.armyId = armyId;
+    }
+    return { s, scoutId: scout.id, armyId };
+  }
+
+  it('does not always reveal the same unit on a partial success', () => {
+    const seen = new Set<string>();
+    // The reveal draws from the rng after the d6, so vary the tail to vary the draw.
+    for (let i = 0; i < 40; i++) {
+      const { s, scoutId, armyId } = mixed();
+      let call = 0;
+      const rng = () => (call++ === 0 ? 2.5 / 6 : (i * 0.137) % 1); // a 3, then a varying draw
+      const t = reconAttempt(s, scoutId, armyId, rng);
+      const flipped = armyUnits(t.state, armyId).filter((u) => u.revealed);
+      expect(flipped).toHaveLength(1);
+      seen.add(flipped[0].type as string);
+    }
+    // Anti-tank is alphabetically first, so the old code returned only that.
+    expect(seen.size).toBeGreaterThan(1);
+  });
+
+  it('still reveals everyone on a 5, whatever the order', () => {
+    const { s, scoutId, armyId } = mixed();
+    const t = reconAttempt(s, scoutId, armyId, d6(5));
+    expect(armyUnits(t.state, armyId).every((u) => u.revealed)).toBe(true);
+  });
+});
+
+// The manual only describes scouting armies, but disorganized units are just as
+// hidden — and a critical success already exposed them.
+describe('scouting the disorganized', () => {
+  const d6 = (face: number) => () => (face - 0.5) / 6;
+
+  function scene(n: number) {
+    const s = newGame();
+    const scout = Object.values(s.units).find((u) => u.owner === 'p1' && u.type === 'recon')!;
+    s.units[scout.id].nodeId = inland.id;
+    const stragglers = place(s, 'p2', inland.id, n);
+    return { s, scoutId: scout.id, stragglers };
+  }
+
+  it('reveals loose units when aimed at the pile', () => {
+    const { s, scoutId, stragglers } = scene(3);
+    const t = reconAttempt(s, scoutId, LOOSE_TARGET, d6(5));
+    expect(t.error).toBeUndefined();
+    for (const u of stragglers) expect(t.state.units[u.id].revealed).toBe(true);
+  });
+
+  it('reveals only as many as the roll earned', () => {
+    const { s, scoutId, stragglers } = scene(4);
+    const t = reconAttempt(s, scoutId, LOOSE_TARGET, d6(4));
+    const shown = stragglers.filter((u) => t.state.units[u.id].revealed);
+    expect(shown).toHaveLength(2);
+  });
+
+  it('still loses the scout on a 1', () => {
+    const { s, scoutId } = scene(2);
+    expect(reconAttempt(s, scoutId, LOOSE_TARGET, d6(1)).state.units[scoutId]).toBeUndefined();
+  });
+
+  it('refuses when there is nothing disorganized to look at', () => {
+    const { s, scoutId } = scene(0);
+    expect(reconAttempt(s, scoutId, LOOSE_TARGET, d6(5)).error).toMatch(/no enemy disorganized/i);
   });
 });

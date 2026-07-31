@@ -14,7 +14,7 @@
 // strategic state side by side, exactly as the two hotseat stores did.
 
 import type { Player, StateTransition } from './types';
-import { playerLabel } from './types';
+import { otherPlayer, playerLabel } from './types';
 import type { Scenario } from './scenario';
 import { defaultScenario } from './scenario';
 import type { BattleState } from './battle';
@@ -47,11 +47,31 @@ import {
   swapSide,
   type Reassignment,
 } from './strategic';
-import { createBattleAt, resolveBattle, resolveRetreat } from './campaign';
+import { callSupportAt, createBattleAt, resolveBattle, resolveRetreat } from './campaign';
 import type { NodeId } from './map';
 import { defaultRng, type Rng } from './dice';
 
 export type View = 'battle' | 'map';
+
+/**
+ * A restart under negotiation.
+ *
+ * Restarting throws away a game both players have spent an hour on, and the
+ * button sits in the panel next to buttons pressed all the time — so it is not
+ * one seat's to press. The request lives in the room rather than in either
+ * client because the answer has to reach the other side, and because a proposal
+ * must survive a refresh: a player who reloads mid-question would otherwise
+ * leave their opponent waiting on an answer that can never come.
+ *
+ * `declined` is the third state, not a second flag: the opponent has said no,
+ * and the board is now waiting on the *proposer* to either drop it and keep
+ * playing or leave. Until they do, nobody can propose again, which is what stops
+ * a refused restart from being asked over and over.
+ */
+export interface RestartRequest {
+  by: Player;
+  declined?: boolean;
+}
 
 export interface RoomState {
   /** Doubles as the Durable Object name — one room per code. */
@@ -60,6 +80,8 @@ export interface RoomState {
   scenario: Scenario;
   battle: BattleState | null;
   strategic: StrategicState;
+  /** A restart one player has put to the other, if any. */
+  restart: RestartRequest | null;
   /** Bumped on every accepted intent, so clients can drop out-of-order frames. */
   version: number;
 }
@@ -80,6 +102,13 @@ type TableIntent =
   | { t: 'startBattle' }
   | { t: 'newScenario' }
   | { t: 'stratReset' }
+  // The three steps of a negotiated restart. Turn order does not apply to any of
+  // them — a game you want to abandon is not one you should have to wait a turn
+  // to ask about — but each has its own answer to "which seat may send this",
+  // enforced below rather than by the mover check.
+  | { t: 'proposeRestart' }
+  | { t: 'answerRestart'; agree: boolean }
+  | { t: 'dismissRestart' }
   // Posting a finished map battle back onto the strategic board. Open to both
   // seats: the result is fully determined by the battle, so either player may
   // press "return to the map" once it is over.
@@ -105,7 +134,7 @@ type StratIntent =
   | { t: 'stratFreeReorganize'; nodeId: NodeId; assign: Reassignment }
   | { t: 'stratDismissFreeReorg'; nodeId: NodeId }
   | { t: 'stratBuildFort'; nodeId: NodeId }
-  | { t: 'stratInitiateBattle'; nodeId: NodeId }
+  | { t: 'stratInitiateBattle'; nodeId: NodeId; armyIds?: string[] }
   | { t: 'stratRecon'; reconId: string; targetArmyId: string }
   | { t: 'stratEndRecon' }
   | { t: 'stratEndTurn' };
@@ -118,7 +147,20 @@ type StratIntent =
  */
 type RetreatIntent = { t: 'stratRetreat'; nodeId: NodeId };
 
-export type Intent = TableIntent | BattleIntent | StratIntent | RetreatIntent;
+/**
+ * The other intent that ignores turn order. Both players answer the indirect-fire
+ * offer during deployment, whoever is deploying at the time — see `callSupport`
+ * for why waiting for your turn would leak the answer. It also needs the map,
+ * which no `BattleIntent` does, so it travels on its own.
+ */
+type SupportIntent = { t: 'callSupport'; gunId: string | null };
+
+export type Intent =
+  | TableIntent
+  | BattleIntent
+  | StratIntent
+  | RetreatIntent
+  | SupportIntent;
 
 // Runtime membership, not just types: intents arrive over a socket, so an
 // unrecognised one has to be rejected rather than fall off the end of a switch
@@ -129,6 +171,9 @@ const TABLE_INTENTS: ReadonlySet<string> = new Set<TableIntent['t']>([
   'startBattle',
   'newScenario',
   'stratReset',
+  'proposeRestart',
+  'answerRestart',
+  'dismissRestart',
   'resolveBattle',
 ]);
 
@@ -171,6 +216,7 @@ export function createRoom(code: string): RoomState {
     scenario: defaultScenario(),
     battle: null,
     strategic: createStrategic(),
+    restart: null,
     version: 0,
   };
 }
@@ -253,7 +299,45 @@ export function applyIntent(
       case 'newScenario':
         return commit(room, { ...room, battle: null, view: 'battle' });
       case 'stratReset':
-        return commit(room, { ...room, strategic: createStrategic(rng) });
+        return commit(room, { ...room, strategic: createStrategic(rng), restart: null });
+
+      case 'proposeRestart':
+        if (room.restart) {
+          return {
+            state: room,
+            error:
+              room.restart.by === actor
+                ? 'You have already asked — waiting for an answer.'
+                : `${playerLabel(room.restart.by)} has already put a restart to you.`,
+          };
+        }
+        return commit(room, { ...room, restart: { by: actor } });
+
+      case 'answerRestart': {
+        const r = room.restart;
+        if (!r) return { state: room, error: 'Nobody has suggested a restart.' };
+        if (r.declined) return { state: room, error: 'That restart has already been answered.' };
+        // Only the seat being *asked* may answer, and never the proposer — which
+        // in hotseat is the same person a moment later, but the seat they answer
+        // as is still the opponent's.
+        if (actor !== otherPlayer(r.by)) {
+          return { state: room, error: 'That restart is not yours to answer.' };
+        }
+        if (!intent.agree) {
+          return commit(room, { ...room, restart: { by: r.by, declined: true } });
+        }
+        // Agreed: a clean board, same room, same seats. Only the code survives.
+        return commit(room, { ...createRoom(room.code), strategic: createStrategic(rng) });
+      }
+
+      case 'dismissRestart': {
+        const r = room.restart;
+        if (!r) return { state: room, error: 'Nothing to dismiss.' };
+        // The proposer's to drop, whether they are withdrawing the question or
+        // accepting a "no" and playing on.
+        if (actor !== r.by) return { state: room, error: 'That restart is not yours to withdraw.' };
+        return commit(room, { ...room, restart: null });
+      }
       case 'resolveBattle': {
         if (!room.battle) return { state: room, error: 'No battle to resolve.' };
         if (room.battle.phase !== 'over') {
@@ -264,6 +348,14 @@ export function applyIntent(
         return commit(room, { ...room, strategic: t.state, battle: null, view: 'map' });
       }
     }
+  }
+
+  // Before the mover check, deliberately: either player may answer the offer at
+  // any point in deployment, so this one is not the current mover's to send.
+  if (intent.t === 'callSupport') {
+    const b = room.battle;
+    if (!b) return { state: room, error: 'No battle in progress.' };
+    return liftBattle(room, callSupportAt(room.strategic, b, actor, intent.gunId));
   }
 
   if (isBattleIntent(intent)) {
@@ -302,7 +394,12 @@ export function applyIntent(
       case 'stratBuildFort':
         return liftStrat(room, buildFort(room.strategic, intent.nodeId));
       case 'stratInitiateBattle': {
-        const { battle, error } = createBattleAt(room.strategic, intent.nodeId, actor);
+        const { battle, error } = createBattleAt(
+          room.strategic,
+          intent.nodeId,
+          actor,
+          intent.armyIds,
+        );
         if (error || !battle) return { state: room, error: error ?? 'Cannot start that battle.' };
         return commit(room, { ...room, battle, view: 'battle' });
       }
@@ -340,9 +437,19 @@ export function applyIntent(
  * the entire point — a client cannot be trusted to answer this about itself.
  */
 export function entitledSeat(room: RoomState, intent: Intent): Player {
-  if (isBattleIntent(intent) && room.battle) {
+  // `callSupport` is not a BattleIntent, but hotseat still has to name a seat for
+  // it, and the only sensible answer with one person at the keyboard is whoever
+  // is deploying. Online this is never reached — the socket's seat decides.
+  if ((isBattleIntent(intent) || intent.t === 'callSupport') && room.battle) {
     return battleMover(room.battle) ?? room.battle.turn;
   }
+  // The restart negotiation names its own seats. In hotseat one person walks
+  // through both halves of it, but they must do so *as* the right seat or the
+  // guards above refuse them — the proposer answers as nobody, the opponent
+  // answers as the opponent.
+  if (intent.t === 'answerRestart' && room.restart) return otherPlayer(room.restart.by);
+  if (intent.t === 'dismissRestart' && room.restart) return room.restart.by;
+
   // A pending retreat is the loser's to resolve, not the current mover's.
   if (isRetreatIntent(intent) && room.strategic.pendingRetreat) {
     return room.strategic.pendingRetreat.player;

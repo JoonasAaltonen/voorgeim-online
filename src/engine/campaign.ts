@@ -13,11 +13,17 @@ import type { BattleUnit } from './types';
 import { UNIT_STATS } from './units';
 import type { NodeId } from './map';
 import { NODE_BY_ID, indirectFireOrigins, isSea, isStaging } from './map';
-import { assembleBattle, type BattleState } from './battle';
+import {
+  assembleBattle,
+  callSupport,
+  type BattleState,
+  type Transition as BattleTransition,
+} from './battle';
 import type { MapUnit, StrategicState, Transition } from './strategic';
 import {
   armiesAt,
   arrivalSide,
+  dissolveEmpty,
   fortKey,
   fortsAt,
   isRecon,
@@ -83,9 +89,11 @@ export function canInitiateBattle(s: StrategicState, nodeId: NodeId, player: Pla
  * node that allows indirect fire" is read here as "a node you hold, uncontested
  * on its own square."
  *
- * Every eligible gun is offered to the board as a reserve support unit; the board
- * has a single support slot per side, so deploying one is what enforces the
- * manual's "a single artillery unit" — the rest simply go home unrevealed.
+ * Eligible guns are *not* put on the board when the battle is built. Doing that
+ * revealed the artillery to the opponent merely by listing it in the deployment
+ * window, so a player who never meant to fire had already paid the price of
+ * being able to. The list is offered to its owner alone, and only an accepted
+ * gun ever becomes a unit — see `callSupportAt`.
  */
 export function supportGuns(s: StrategicState, nodeId: NodeId, player: Player): MapUnit[] {
   const enemy = otherPlayer(player);
@@ -139,24 +147,41 @@ export function createBattleAt(
   s: StrategicState,
   nodeId: NodeId,
   attacker: Player,
+  armyIds?: string[],
 ): { battle?: BattleState; error?: string } {
   if (!canInitiateBattle(s, nodeId, attacker)) {
     return { error: 'No enemy to attack in that location.' };
   }
   const defender = otherPlayer(attacker);
+
+  // The attacker chooses which of their armies make the assault; anything held
+  // back stays in the node, organized and untouched. This is what makes a probing
+  // attack possible — commit one army, keep another as vanguard — and it is why
+  // winning does not always clear the ground.
+  //
+  // The defender gets no such choice: "all organized defensive units will join
+  // the battle". Defence is not something you opt part of your garrison out of,
+  // so a won battle still means something.
+  const here = armiesAt(s, nodeId, attacker).map((a) => a.id);
+  const committed = armyIds ?? here;
+  if (committed.length === 0) return { error: 'Choose at least one army to attack with.' };
+  const stranger = committed.find((id) => !here.includes(id));
+  if (stranger) return { error: 'That army is not in this location.' };
+
   // The attacking force leaves its wounded behind — they cannot join an assault.
   // The defender's wounded are dragged in all the same, entering face-up and
   // fighting at −1, because a defensive engagement is forced on them.
-  const attackerUnits = combatantsAt(s, nodeId, attacker).filter((u) => !u.wounded);
+  const attackerUnits = combatantsAt(s, nodeId, attacker).filter(
+    (u) => !u.wounded && committed.includes(u.armyId!),
+  );
+  if (attackerUnits.length === 0) {
+    return { error: 'That force has nobody able to lead an assault.' };
+  }
   const defenderUnits = combatantsAt(s, nodeId, defender);
   const units: BattleUnit[] = [
     ...attackerUnits.map((u) => toBattleUnit(u)),
     ...defenderUnits.map((u) => toBattleUnit(u)),
   ];
-  for (const p of PLAYERS) {
-    for (const g of supportGuns(s, nodeId, p)) units.push(toBattleUnit(g, true));
-  }
-
   // Deploy order follows recon, judged only on the units actually taking the
   // field — a wounded attacker left at home does not count as a revealed side.
   const aRev = anyRevealed(attackerUnits);
@@ -176,6 +201,17 @@ export function createBattleAt(
 /**
  * Move a named beaten force to `to`. Only the units listed — recon moves on its
  * own, and disorganized units that were never in the fight hold their ground.
+ *
+ * Everyone falling back is already disorganized, and nothing here has to make
+ * them so. "Battle ends in a victory for a player when the opposing side has all
+ * their units destroyed or withdrawn from the battle board", and withdrawing is
+ * what disorganizes a unit — so a side that lost has, of the units it committed,
+ * either nothing left or nothing organized.
+ *
+ * That is also why a retreat needs no division spot and can never be blocked by
+ * one: disorganized units do not occupy spots, so a beaten force can always fall
+ * back onto ground its own armies already fill. Encirclement stays what it says —
+ * a dead end is the *winner* holding every way out, never your own crowding.
  */
 function performRetreat(
   s: StrategicState,
@@ -194,17 +230,51 @@ function performRetreat(
 }
 
 /**
- * The loser's force that actually falls back: whoever is still in an army, plus
- * anyone the battle turned loose by withdrawing them.
+ * The loser's force that actually falls back: the units that took the field, and
+ * only those. Losing a battle is not losing everything you had standing in the
+ * location — it is losing what you sent in.
  *
- * The exclusion is the point — disorganized units that were standing in the node
- * before the battle began never took part, so they do not get a free ride out on
- * the back of a defeat. They stay where they are, and the winner's armies get one
- * turn-start to overrun them (`standingOverrun`) unless their owner spends their
- * own turn rescuing them.
+ * Two exclusions, for the same reason from opposite directions:
+ *
+ * - Disorganized units already standing in the node never took part, so they get
+ *   no free ride out on the back of a defeat. They stay, and the winner's armies
+ *   get one turn-start to overrun them (`standingOverrun`) unless their owner
+ *   spends their own turn rescuing them.
+ * - Units still in an army that never entered the fight — an army the attacker
+ *   held back, a wounded unit kept out of the assault, a reserve that never fit a
+ *   row — likewise stay where they are, intact and organized. They were not
+ *   beaten; the force sent against them was.
+ *
+ * The consequence is deliberate: a won battle no longer necessarily clears the
+ * node. Beat an attacker's probing assault and their vanguard is still standing
+ * there, ready to be fought again.
  */
 function retreatingForce(s: StrategicState, node: NodeId, loser: Player, battle: BattleState): MapUnit[] {
-  return fightersAt(s, node, loser).filter((u) => u.armyId || battle.units[u.id]);
+  return fightersAt(s, node, loser).filter((u) => {
+    const bu = battle.units[u.id];
+    return !!bu && bu.status !== 'reserve' && !bu.support;
+  });
+}
+
+/**
+ * Answer the indirect-fire offer for a battle that came off the map: `gunId`
+ * names one of the player's own eligible guns, or null declines.
+ *
+ * Eligibility is re-derived from the strategic state at the moment of the answer
+ * rather than frozen when the battle was built, because it is the map that knows
+ * which guns exist — and the map, unlike the battle board, is fogged.
+ */
+export function callSupportAt(
+  s: StrategicState,
+  b: BattleState,
+  player: Player,
+  gunId: string | null,
+): BattleTransition {
+  if (!b.node) return { state: b, error: 'This battle is not being fought over a location.' };
+  if (gunId === null) return callSupport(b, player, null);
+  const gun = supportGuns(s, b.node as NodeId, player).find((g) => g.id === gunId);
+  if (!gun) return { state: b, error: 'That gun cannot reach this battle.' };
+  return callSupport(b, player, toBattleUnit(gun, true));
 }
 
 /** Adjacent nodes a beaten force may fall back to: anywhere the winner is not. */
@@ -250,6 +320,10 @@ export function resolveBattle(s0: StrategicState, battle: BattleState): Transiti
   }
   // Prepared fortifications were spent in this battle, whatever its outcome.
   for (const p of PLAYERS) delete s.forts[fortKey(node, p)];
+  // A battle is the one place an army can lose its last member without anyone
+  // reorganizing, and an army object that outlives its units still counts against
+  // `MAX_ARMIES` — so it has to be swept here as well as after a reassignment.
+  dissolveEmpty(s);
 
   const winner = battle.winner;
   log(

@@ -1,6 +1,14 @@
+import { useEffect, useRef, useState } from 'react';
 import { BOARD, CELL_RADIUS, SUPPORT_RADIUS, boardCells } from '../engine/board';
 import { coinAsset, isSupportUnit, PLAYER_SIDE } from '../engine/types';
-import { currentDeployer, attackTargetIds, moveTargetCells, indirectTargetIds } from '../engine/battle';
+import {
+  currentDeployer,
+  attackTargetIds,
+  moveTargetCells,
+  indirectTargetIds,
+  type BattleState,
+  type CombatEntry,
+} from '../engine/battle';
 import { useBattleStore, occupantOf, FORT_SELECTION } from '../state/battleStore';
 import { useSession } from '../state/sessionStore';
 import './BattleBoard.css';
@@ -10,6 +18,43 @@ const pct = (v: number, total: number) => `${(v / total) * 100}%`;
 
 type Highlight = 'deploy' | 'attack' | 'move';
 
+/** How long the two cells of the last exchange stay ringed. */
+const STRIKE_MS = 2600;
+
+/**
+ * The cells of the most recent exchange, for a few seconds after it happens.
+ *
+ * Selection is private — only the acting player sees what they picked up — so
+ * without this the opponent watches coins lose HP with no idea who shot whom.
+ * The log carries the answer to *both* players identically, which is what makes
+ * a purely local timer safe here: each client rings the same pair, and neither
+ * needs the other to tell it to.
+ *
+ * The first entry seen is deliberately skipped. On a reload or a reconnect the
+ * newest combat entry may be minutes old, and replaying its rings would announce
+ * an attack that already happened.
+ */
+function useLastStrike(battle: BattleState | null): CombatEntry | null {
+  const last = battle ? [...battle.log].reverse().find((e) => e.combat)?.combat : undefined;
+  const lastId = battle ? [...battle.log].reverse().find((e) => e.combat)?.id : undefined;
+  // Frozen at mount: whatever exchange the log already held when we started
+  // watching. Held in state rather than a ref because it is read during render.
+  const [baseline] = useState(lastId);
+  const seen = useRef<number | undefined>(undefined);
+  const [shown, setShown] = useState<CombatEntry | null>(null);
+
+  useEffect(() => {
+    if (seen.current === undefined) seen.current = baseline;
+    if (lastId === undefined || lastId === seen.current) return;
+    seen.current = lastId;
+    setShown(last ?? null);
+    const t = setTimeout(() => setShown(null), STRIKE_MS);
+    return () => clearTimeout(t);
+  }, [lastId, last, baseline]);
+
+  return shown;
+}
+
 export function BattleBoard() {
   const battle = useSession((s) => s.room.battle);
   const selectedId = useBattleStore((s) => s.selectedId);
@@ -18,6 +63,7 @@ export function BattleBoard() {
   const attackTarget = useBattleStore((s) => s.attackTarget);
   const indirectFire = useBattleStore((s) => s.indirectFire);
   const moveTo = useBattleStore((s) => s.moveTo);
+  const strike = useLastStrike(battle ?? null);
 
   const highlights: Record<string, Highlight> = {};
   const sel = battle && selectedId ? battle.units[selectedId] : undefined;
@@ -89,11 +135,16 @@ export function BattleBoard() {
         const hl = highlights[cell.id];
         const isSel = occ && occ.id === selectedId;
         const fort = battle?.forts[cell.id];
+        // A cell can be both ends of the same exchange when the winner advanced
+        // into it; the shooter's own ring wins, since that is the coin standing
+        // there now.
+        const struck =
+          strike?.attackerCell === cell.id ? 'shooter' : strike?.defenderCell === cell.id ? 'struck' : '';
         return (
           <button
             key={cell.id}
             type="button"
-            className={`bcell${hl ? ` bcell--${hl}` : ''}${isSel ? ' bcell--selected' : ''}`}
+            className={`bcell${hl ? ` bcell--${hl}` : ''}${isSel ? ' bcell--selected' : ''}${struck ? ` bcell--${struck}` : ''}`}
             onClick={() => onCell(cell.id)}
             style={{
               left: pct(cell.x, BOARD.width),

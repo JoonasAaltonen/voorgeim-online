@@ -35,8 +35,13 @@ import type { Player } from '../engine/types';
  * 7 — the siege counter is scored per *round* rather than per own-turn, so a
  * stored `hold` means something different. Restoring a v6 room would carry a
  * turn-count forward as a round-count and decide the game early.
+ *
+ * 8 — support artillery is offered rather than fielded, so `BattleState` gained
+ * `supportAsked`. A v7 battle restored here has no such list and every read of it
+ * throws; worse, a v7 battle already has its support guns on the board, where
+ * they are exactly the reveal this change exists to prevent.
  */
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 
 /** Room codes are 6 chars from an alphabet with no 0/O or 1/I to mis-read aloud. */
 export const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';

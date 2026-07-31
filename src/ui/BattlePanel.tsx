@@ -7,6 +7,9 @@ import {
   type CombatEntry,
 } from '../engine/battle';
 import type { CombatResult } from '../engine/combat';
+import { supportGuns } from '../engine/campaign';
+import { armiesAt } from '../engine/strategic';
+import type { NodeId } from '../engine/map';
 import { useBattleStore, FORT_SELECTION } from '../state/battleStore';
 import { useSession } from '../state/sessionStore';
 import './BattlePanel.css';
@@ -85,33 +88,125 @@ function CombatLogItem({ c }: { c: CombatEntry }) {
   );
 }
 
+/**
+ * The indirect-fire offer, shown only to the player it belongs to.
+ *
+ * This is the whole point of not putting support guns on the board up front: the
+ * question is asked here, on your own screen, from your own side of the map, and
+ * the opponent learns nothing until you answer yes. Declining is a real answer
+ * and sticks — the gun stays hidden and stays home.
+ *
+ * In hotseat there is no seat, so the offer follows whoever is deploying, which
+ * is also the only person there to answer it.
+ */
+function SupportOffer({ battle }: { battle: BattleState }) {
+  const strategic = useSession((s) => s.room.strategic);
+  const seat = useSession((s) => s.seat);
+  const dispatch = useSession((s) => s.dispatch);
+  const me = seat ?? currentDeployer(battle);
+  if (!me || !battle.node || battle.supportAsked.includes(me)) return null;
+
+  const guns = supportGuns(strategic, battle.node as NodeId, me);
+  if (guns.length === 0) return null;
+  const origins = [...new Set(guns.map((g) => g.nodeId))];
+
+  return (
+    <div className="panel__section">
+      <p className="note">
+        Artillery of yours can reach {battle.node} from{' '}
+        <b>{origins.join(', ')}</b>. Bringing a gun in <b>reveals it</b> on the map — and it must be
+        called now, before the battle starts.
+      </p>
+      <div className="reserves">
+        {guns.map((g) => (
+          <button
+            key={g.id}
+            type="button"
+            className="chip"
+            onClick={() => dispatch({ t: 'callSupport', gunId: g.id })}
+          >
+            <img src={coinAsset('artillery', g.owner)} alt="" />
+            fire from {g.nodeId}
+          </button>
+        ))}
+        <button
+          type="button"
+          className="btn btn--ghost"
+          onClick={() => dispatch({ t: 'callSupport', gunId: null })}
+        >
+          No support — stay hidden
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function DeploymentControls({ battle }: { battle: BattleState }) {
   const selectedId = useBattleStore((s) => s.selectedId);
   const select = useBattleStore((s) => s.select);
   const pass = useBattleStore((s) => s.passDeploy);
   const selectFort = useBattleStore((s) => s.selectFort);
+  const strategic = useSession((s) => s.room.strategic);
   const deployer = currentDeployer(battle)!;
   const reserves = reserveUnits(battle, deployer);
   const fortsLeft = battle.fortsLeft[deployer];
+
+  // Armies are numbered by their order in the node, matching what the strategic
+  // panel calls them, so "Army 2" means the same thing on both screens.
+  const armyOrder = battle.node
+    ? armiesAt(strategic, battle.node as NodeId, deployer).map((a) => a.id)
+    : [];
+  const reserveGroups = (() => {
+    const groups = new Map<string, { key: string; label: string; units: typeof reserves }>();
+    for (const u of reserves) {
+      const armyId = strategic.units[u.id]?.armyId;
+      const i = armyId ? armyOrder.indexOf(armyId) : -1;
+      const key = armyId ?? 'none';
+      const label = isSupportUnit(u)
+        ? 'Indirect fire support'
+        : i >= 0
+          ? `Army ${i + 1}`
+          : 'Unattached';
+      const g = groups.get(key) ?? { key, label, units: [] };
+      g.units.push(u);
+      groups.set(key, g);
+    }
+    return [...groups.values()];
+  })();
 
   return (
     <div className="panel__section">
       <div className="turn turn--deploy">
         Deploying: <b>{playerLabel(deployer)}</b> · front-to-back, row {battle.deploy!.row + 1} of 3
       </div>
+      {reserves.length === 0 && fortsLeft === 0 && (
+        <span className="muted">No units left in reserve.</span>
+      )}
+      {/* Grouped by the army each unit came from, which the map still knows —
+          battle units carry their real map ids. On the table you move whole
+          stacks onto the board and can see what came from where; without this
+          the player deploys a pile of loose coins and only finds out afterwards
+          that they spread damage across three armies, each of which then needs
+          its own action to move. */}
+      {reserveGroups.map((g) => (
+        <div key={g.key} className="reserves__group">
+          {reserveGroups.length > 1 && <span className="reserves__army">{g.label}</span>}
+          <div className="reserves">
+            {g.units.map((u) => (
+              <button
+                key={u.id}
+                type="button"
+                className={`chip${selectedId === u.id ? ' chip--sel' : ''}`}
+                onClick={() => select(u.id)}
+              >
+                <img src={coinAsset(u.type, u.owner)} alt="" />
+                {isSupportUnit(u) ? 'support' : u.type}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
       <div className="reserves">
-        {reserves.length === 0 && fortsLeft === 0 && <span className="muted">No units left in reserve.</span>}
-        {reserves.map((u) => (
-          <button
-            key={u.id}
-            type="button"
-            className={`chip${selectedId === u.id ? ' chip--sel' : ''}`}
-            onClick={() => select(u.id)}
-          >
-            <img src={coinAsset(u.type, u.owner)} alt="" />
-            {isSupportUnit(u) ? 'support' : u.type}
-          </button>
-        ))}
         {fortsLeft > 0 && (
           <button
             type="button"
@@ -199,6 +294,7 @@ export function BattlePanel() {
         </div>
       )}
 
+      {battle.phase === 'deployment' && <SupportOffer battle={battle} />}
       {battle.phase === 'deployment' && <DeploymentControls battle={battle} />}
       {battle.phase === 'battle' && <BattleControls battle={battle} />}
 

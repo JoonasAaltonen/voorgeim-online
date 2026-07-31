@@ -54,6 +54,46 @@
 }
 
 /*
+ * The last exchange, ringed on both players' boards for a few seconds. Drawn
+ * with `outline` rather than `box-shadow` so it stacks with the selection and
+ * targeting glows above instead of fighting them for the same property — the
+ * cell a unit just fired on is very often also a cell it can still reach.
+ *
+ * Two colours, because the pair is not symmetric: cyan is who fired, red is what
+ * was hit. That is what makes the awkward cases legible without extra rules —
+ * an empty cyan ring is a shooter that died to the counter, an empty red ring is
+ * a target that artillery removed from a distance, and a cyan ring beside a red
+ * one holding a coin is a unit that killed and advanced.
+ */
+.bcell--shooter,
+.bcell--struck {
+  outline-style: solid;
+  outline-width: 3px;
+  outline-offset: 2px;
+  /* Only the ring pulses. Animating the button's opacity would dim the coin
+     standing in it, which is the one thing that must stay readable. */
+  animation: strike-pulse 0.9s ease-in-out 2;
+}
+.bcell--shooter {
+  outline-color: rgba(90, 220, 255, 0.95);
+}
+.bcell--struck {
+  outline-color: rgba(255, 70, 70, 0.95);
+}
+
+@keyframes strike-pulse {
+  0%, 100% { outline-offset: 2px; }
+  50% { outline-offset: 5px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bcell--shooter,
+  .bcell--struck {
+    animation: none;
+  }
+}
+
+/*
  * Fortification: an arc drawn around the covered directions only — front and
  * both flanks — so the open rear is visible at a glance. The rear-facing border
  * is dropped, leaving a ~270° ring.

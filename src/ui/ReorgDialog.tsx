@@ -18,7 +18,9 @@ import {
   armiesAt,
   armyCount,
   isRecon,
+  slotCap,
   supplyCap,
+  armyUnits,
   unitsAtFor,
   type Reassignment,
 } from '../engine/strategic';
@@ -40,21 +42,36 @@ interface Column {
 /** Armies have generated ids; players need a name they can hold in their head. */
 const armyName = (i: number) => `Army ${i + 1}`;
 
-export function ReorgDialog({ nodeId, free = false }: { nodeId: NodeId; free?: boolean }) {
+/**
+ * `splitArmy` turns this into the free split-off table: one army's units, and a
+ * single place to put them down. Splitting is free and legal anywhere, so it must
+ * *not* become a free reorganization — hence only the two columns, and no way to
+ * move a unit into an army.
+ */
+export function ReorgDialog({
+  nodeId,
+  free = false,
+  splitArmy,
+}: {
+  nodeId: NodeId;
+  free?: boolean;
+  splitArmy?: string;
+}) {
   const s = useSession((st) => st.room.strategic);
   const closeNormal = useStrategicStore((st) => st.closeReorg);
   const closeFree = useStrategicStore((st) => st.closeFreeReorg);
   const commitNormal = useStrategicStore((st) => st.reorganize);
   const commitFree = useStrategicStore((st) => st.commitFreeReorg);
-  const close = free ? closeFree : closeNormal;
-  const commit = free ? commitFree : commitNormal;
+  const doSplit = useStrategicStore((st) => st.split);
+  const closeSplit = useStrategicStore((st) => st.closeSplit);
+  const close = splitArmy ? closeSplit : free ? closeFree : closeNormal;
 
   const player = s.turn;
   const armies = armiesAt(s, nodeId, player);
   // Recon never joins an army, so it is not part of this table. The free
   // post-battle reshuffle covers only units that came back organized — a
   // withdrawn unit is disorganized now and needs a full reorganization to re-form.
-  const units = unitsAtFor(s, nodeId, player)
+  const units = (splitArmy ? armyUnits(s, splitArmy) : unitsAtFor(s, nodeId, player))
     .filter((u) => !isRecon(u) && (!free || !!u.armyId))
     .sort((a, b) => a.type.localeCompare(b.type) || a.id.localeCompare(b.id));
 
@@ -70,11 +87,23 @@ export function ReorgDialog({ nodeId, free = false }: { nodeId: NodeId; free?: b
   // "Only one new army can be created during a single reorganization action", so
   // there is exactly one column for it, and none at all when the cap is reached.
   const canForm = armyCount(s, player) < MAX_ARMIES;
-  const columns: Column[] = [
-    { key: 'loose', target: null, label: 'Disorganized', hint: '1 supply between them' },
-    ...armies.map((a, i) => ({ key: a.id, target: a.id, label: armyName(i) })),
-    ...(canForm ? [{ key: NEW_ARMY, target: NEW_ARMY, label: 'New army', hint: 'forming' }] : []),
-  ];
+  const columns: Column[] = splitArmy
+    ? [
+        {
+          key: splitArmy,
+          target: splitArmy,
+          label: armyName(armies.findIndex((a) => a.id === splitArmy)),
+          hint: 'stays organized',
+        },
+        { key: 'loose', target: null, label: 'Split off', hint: 'becomes disorganized' },
+      ]
+    : [
+        { key: 'loose', target: null, label: 'Disorganized', hint: '1 supply between them' },
+        ...armies.map((a, i) => ({ key: a.id, target: a.id, label: armyName(i) })),
+        ...(canForm
+          ? [{ key: NEW_ARMY, target: NEW_ARMY, label: 'New army', hint: 'forming' }]
+          : []),
+      ];
 
   const drop = (target: Target, unitId = held) => {
     if (!unitId) return;
@@ -92,12 +121,20 @@ export function ReorgDialog({ nodeId, free = false }: { nodeId: NodeId; free?: b
   const limit = supplyCap(s, nodeId, player);
   const over_ = usedAfter > limit;
 
+  // Division spots are the other limit, and the harder one: supply says how many
+  // units the node feeds, spots say how many *armies* it has room to stand. Every
+  // army here is represented in the table, so the columns in use are the count.
+  // Splitting only ever dissolves armies, so it cannot crowd a node.
+  const spots = slotCap(s, nodeId, player);
+  const armiesAfter = new Set(units.map((u) => assign[u.id]).filter((t) => t !== null)).size;
+  const crowded = !splitArmy && armiesAfter > spots;
+
   return (
     <div className="reorg" role="dialog" aria-modal="true" aria-label="Reorganize">
       <div className="reorg__box">
         <div className="reorg__head">
           <b>
-            {free ? 'Re-sort the victors' : 'Reorganize'} —{' '}
+            {splitArmy ? 'Split off units' : free ? 'Re-sort the victors' : 'Reorganize'} —{' '}
             {isStaging(nodeId) ? `${playerLabel(player)} staging area` : NODE_BY_ID[nodeId].id}
           </b>
           <button type="button" className="reorg__x" onClick={close} aria-label="Close">
@@ -106,12 +143,23 @@ export function ReorgDialog({ nodeId, free = false }: { nodeId: NodeId; free?: b
         </div>
 
         <p className="reorg__note">
-          Drag units between the columns, or click one and then click where it should go. It may
-          form <b>one</b> new army — however many units join it.
-          {free
-            ? ' Free after the battle, and it costs no action; the survivors stay revealed unless this location is controlled.'
-            : ' One action.'}
-          {!canForm && ` You already field ${MAX_ARMIES} armies, so no new one can form.`}
+          Drag units between the columns, or click one and then click where it should go.
+          {splitArmy ? (
+            <>
+              {' '}
+              Choose which units leave the army — <b>you</b> pick, not the stack order. Free, and
+              it costs no action; they become disorganized where they stand.
+            </>
+          ) : (
+            <>
+              {' '}
+              It may form <b>one</b> new army — however many units join it.
+              {free
+                ? ' Free after the battle, and it costs no action; the survivors stay revealed unless this location is controlled.'
+                : ' One action.'}
+              {!canForm && ` You already field ${MAX_ARMIES} armies, so no new one can form.`}
+            </>
+          )}
         </p>
 
         <div className="reorg__board">
@@ -204,12 +252,28 @@ export function ReorgDialog({ nodeId, free = false }: { nodeId: NodeId; free?: b
           {over_ && ' — the excess disorganizes when your turn ends'}
         </div>
 
+        {!splitArmy && (
+          <div className={crowded ? 'reorg__supply reorg__supply--over' : 'reorg__supply'}>
+            Division spots {armiesAfter} / {spots === Infinity ? '∞' : spots}
+            {crowded && ' — there is nowhere to stand that many armies'}
+          </div>
+        )}
+
         <div className="reorg__actions">
           <button type="button" className="sbtn sbtn--ghost" onClick={close}>
             Cancel
           </button>
-          <button type="button" className="sbtn" onClick={() => commit(assign)}>
-            {free ? 'Re-sort (free)' : 'Reorganize (1 action)'}
+          <button
+            type="button"
+            className="sbtn"
+            disabled={crowded}
+            onClick={() =>
+              splitArmy
+                ? doSplit(units.filter((u) => assign[u.id] === null).map((u) => u.id))
+                : (free ? commitFree : commitNormal)(assign)
+            }
+          >
+            {splitArmy ? 'Split off (free)' : free ? 'Re-sort (free)' : 'Reorganize (1 action)'}
           </button>
         </div>
       </div>

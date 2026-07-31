@@ -126,6 +126,22 @@ describe('battle flow', () => {
     expect(t.state.phase).toBe('over');
   });
 
+  it('records both cells of an exchange, even when a unit dies there', () => {
+    const start = deployFrontAndStart();
+    const from = start.units['p1-armor-1'].cellId;
+    const at = start.units['p2-artillery-1'].cellId;
+
+    const rng = seqRng([0.9, 0, 0, 0.2, 0.2]);
+    const t = attack(start, 'p1-armor-1', 'p2-artillery-1', rng);
+
+    // The defender is dead and has lost its cellId, so the log entry is now the
+    // only thing that knows where it stood — which is the whole point of it.
+    expect(t.state.units['p2-artillery-1'].cellId).toBeUndefined();
+    const c = [...t.state.log].reverse().find((e) => e.combat)!.combat!;
+    expect(c.attackerCell).toBe(from);
+    expect(c.defenderCell).toBe(at);
+  });
+
   it('artillery arc = distance-2 line of 3 in all four directions, clipped', () => {
     const arc = artilleryArcCells('bottom-r1-c1'); // gr4,gc1
     expect(arc).toContain('top-r0-c1'); // straight up 2, across the frontline
