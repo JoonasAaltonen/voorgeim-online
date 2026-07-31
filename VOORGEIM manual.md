@@ -97,22 +97,22 @@ This means initiative being in favor of the player with the disorganized units m
 
 ## Unit properties 
 
-Unit type - Soft or hard target type
+Unit type - Soft or hard target type 
 
-Soft attack - Damage against soft targets
+Soft attack - Damage against soft targets 
 
-Hard attack - Damage against hard targets
+Hard attack - Damage against hard targets 
 
-Breakthrough - Number of offensive dice rolls
+Breakthrough - Number of offensive dice rolls 
 
-Toughness - Number of defensive dice rolls
+Toughness - Number of defensive dice rolls 
 
 Hitpoints - How much damage the unit can take before being wounded or destroyed
 
-## Unit types {#unit-types}
+## Unit types
 
-| Unit | Target type | S | H | B | T | HP  |
-| :---- | :---- | :---- |
+| Unit | Target type | Soft Attack | Hard Attack | Breakthrough | Toughness | Hitpoints  |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
 | Infantry  | Soft target | 2 | 1 | 1 | 3 | 4 |
 | Wounded Infantry | Soft target | 1 | 0 | 1 | 3 | 1 |
 | Artillery | Soft target | 3 | 1 | 2 | 2 | 2 |
